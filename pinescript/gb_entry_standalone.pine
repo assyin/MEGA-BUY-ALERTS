@@ -1,0 +1,389 @@
+//@version=6
+indicator("🎯 Golden Box Entry Monitor #ASSYIN-2026", overlay=true, max_boxes_count=10, max_lines_count=20, max_labels_count=20)
+
+// =====================================================
+// 📦 GOLDEN BOX — Just set the 4H candle date/time
+// =====================================================
+grpGB = "═══ 📦 Golden Box ═══"
+gb_enabled   = input.bool(true, "Enable Golden Box", group=grpGB)
+gb_startDate = input.time(timestamp("2026-02-15 04:00"), "📅 4H Candle Date/Time", group=grpGB,
+     tooltip="Select the 4H candle of the MEGA BUY signal.\nExample: 15/02/2026 04:00 = the 4H candle starting at 04:00")
+gb_score     = input.int(8, "★ MEGA BUY Score /10", minval=1, maxval=10, group=grpGB)
+gb_expiry    = input.int(15, "Expiry (4H bars)", minval=5, maxval=100, group=grpGB)
+
+// ── Auto-detect 4H candle High/Low/RSI ──
+gb_f_4hData() =>
+    _rsi = ta.rsi(close, 14)
+    [high, low, close, _rsi, time]
+
+[gb_h4_hi, gb_h4_lo, gb_h4_cl, gb_h4_rsiRaw, gb_h4_time] = request.security(
+     syminfo.tickerid, "240", gb_f_4hData(), lookahead=barmerge.lookahead_off)
+
+// Capture the exact 4H candle matching the input datetime
+var float gb_boxHigh = na
+var float gb_boxLow  = na
+var float gb_rsiRef  = na
+var bool  gb_found   = false
+
+// Match: 4H candle time falls within the same 4-hour window as input
+gb_h4ms   = 4 * 60 * 60 * 1000  // 4 hours in ms
+gb_match  = not gb_found and gb_h4_time >= gb_startDate and gb_h4_time < gb_startDate + gb_h4ms
+
+if gb_match
+    gb_boxHigh := gb_h4_hi
+    gb_boxLow  := gb_h4_lo
+    gb_rsiRef  := gb_h4_rsiRaw
+    gb_found   := true
+
+grpTP = "═══ 🎯 TP / SL ═══"
+gb_tpMult = input.float(1.5, "TP × box height", step=0.1, group=grpTP)
+gb_slAtr  = input.float(0.5, "SL × ATR buffer", step=0.1, group=grpTP)
+gb_showTP = input.bool(true, "Show TP/SL lines", group=grpTP)
+
+grpPanel = "═══ 📊 Panel ═══"
+gb_showPanel = input.bool(true, "Show Panel", group=grpPanel)
+gb_panelPos  = input.string("Top Right", "Panel Position",
+     options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grpPanel)
+
+// =====================================================
+// 🔶 Assyin# Ichimoku Cloud — Dynamic Engine
+// =====================================================
+grpIch = "═══ 🔶 Ichimoku Cloud ═══"
+gb_tkMin  = input.int(9, "Tenkan Min", group=grpIch)
+gb_tkMax  = input.int(30, "Tenkan Max", group=grpIch)
+gb_kjMin  = input.int(20, "Kijun Min", group=grpIch)
+gb_kjMax  = input.int(60, "Kijun Max", group=grpIch)
+gb_skMin  = input.int(50, "Senkou Min", group=grpIch)
+gb_skMax  = input.int(120, "Senkou Max", group=grpIch)
+gb_dynPct = input.float(96.85, "Adaptive %", group=grpIch) / 100.0
+gb_skOff  = input.int(26, "Displacement", group=grpIch)
+gb_chFilt = input.int(25, "Chikou Filter", group=grpIch)
+gb_volPk  = input.int(50, "OBV Peak", group=grpIch)
+gb_atrF   = input.int(14, "ATR Fast", group=grpIch)
+gb_atrS   = input.int(46, "ATR Slow", group=grpIch)
+
+// ── Cloud Function ──
+gb_f_cloud() =>
+    _alt = ta.swma(close > open ? high : low)
+    _haC = ohlc4
+    _hChg = ta.change(_haC)
+    _obv = ta.cum((_hChg > 0 ? 1.0 : _hChg < 0 ? -1.0 : 0.0) * volume)
+    _aF = ta.atr(gb_atrF)
+    _aS = ta.atr(gb_atrS)
+    _cH = ta.highest(high, gb_chFilt)[gb_chFilt]
+    _cL = ta.lowest(low, gb_chFilt)[gb_chFilt]
+    _cSig = _alt > _cH ? 1 : _alt < _cL ? -1 : 0
+    _bull = _obv > gb_volPk and _aF > _aS and _cSig == 1
+
+    var float _dTk = math.avg(gb_tkMin, gb_tkMax)
+    _dTk := _bull ? math.max(gb_tkMin, _dTk * gb_dynPct) : math.min(gb_tkMax, _dTk * (2.0 - gb_dynPct))
+    var float _dKj = math.avg(gb_kjMin, gb_kjMax)
+    _dKj := _bull ? math.max(gb_kjMin, _dKj * gb_dynPct) : math.min(gb_kjMax, _dKj * (2.0 - gb_dynPct))
+    var float _dSk = math.avg(gb_skMin, gb_skMax)
+    _dSk := _bull ? math.max(gb_skMin, _dSk * gb_dynPct) : math.min(gb_skMax, _dSk * (2.0 - gb_dynPct))
+
+    _tkI = math.max(int(_dTk), 2)
+    _kjI = math.max(int(_dKj), 2)
+    _skI = math.max(int(_dSk), 2)
+
+    _tk = math.avg(ta.highest(high, _tkI), ta.lowest(low, _tkI))
+    _kj = math.avg(ta.highest(high, _kjI), ta.lowest(low, _kjI))
+    _sA = math.avg(_tk, _kj)
+    _sAd = _sA[gb_skOff - 1]
+    _sB = math.avg(ta.highest(high, _skI), ta.lowest(low, _skI))
+    _sBd = _sB[gb_skOff - 1]
+    _cTop = math.max(nz(_sAd), nz(_sBd))
+    [_cTop, close, _skI, _tkI, _kjI]
+
+// ── Cloud on 1H and 30M ──
+[gb_ct_1h, gb_cl_1h, gb_dSk, gb_dTk, gb_dKj] = request.security(
+     syminfo.tickerid, "60", gb_f_cloud(), lookahead=barmerge.lookahead_off)
+[gb_ct_30m, gb_cl_30m, _, _, _] = request.security(
+     syminfo.tickerid, "30", gb_f_cloud(), lookahead=barmerge.lookahead_off)
+
+// =====================================================
+// 📊 DMI Calculation (for condition 1)
+// =====================================================
+grpDMI = "═══ DMI ═══"
+gb_dmiLen = input.int(14, "DI Length", group=grpDMI)
+
+gb_dmiUp      = ta.change(high)
+gb_dmiDown    = -ta.change(low)
+gb_dmiPlusDM  = gb_dmiUp > gb_dmiDown and gb_dmiUp > 0 ? gb_dmiUp : 0.0
+gb_dmiMinusDM = gb_dmiDown > gb_dmiUp and gb_dmiDown > 0 ? gb_dmiDown : 0.0
+gb_dmiTrur    = ta.rma(ta.tr, gb_dmiLen)
+gb_dmiPlus    = fixnan(100 * ta.rma(gb_dmiPlusDM, gb_dmiLen) / gb_dmiTrur)
+gb_dmiMinus   = fixnan(100 * ta.rma(gb_dmiMinusDM, gb_dmiLen) / gb_dmiTrur)
+
+// DMI on 4H
+gb_f_dmi() =>
+    _u = ta.change(high)
+    _d = -ta.change(low)
+    _p = _u > _d and _u > 0 ? _u : 0.0
+    _m = _d > _u and _d > 0 ? _d : 0.0
+    _t = ta.rma(ta.tr, gb_dmiLen)
+    [fixnan(100 * ta.rma(_p, gb_dmiLen) / _t), fixnan(100 * ta.rma(_m, gb_dmiLen) / _t)]
+
+[gb_h4_dip, gb_h4_dim] = request.security(syminfo.tickerid, "240", gb_f_dmi(), lookahead=barmerge.lookahead_off)
+
+// =====================================================
+// 📈 RSI (for condition 3)
+// =====================================================
+grpRSI = "═══ RSI ═══"
+gb_rsiLen = input.int(14, "RSI Length", group=grpRSI)
+
+gb_rsi = ta.rsi(close, gb_rsiLen)
+
+// RSI on 4H
+gb_h4_rsi = request.security(syminfo.tickerid, "240", ta.rsi(close, gb_rsiLen), lookahead=barmerge.lookahead_off)
+
+// 4H close & ATR
+gb_h4_close = request.security(syminfo.tickerid, "240", close, lookahead=barmerge.lookahead_off)
+gb_h4_atr   = request.security(syminfo.tickerid, "240", ta.atr(14), lookahead=barmerge.lookahead_off)
+
+// =====================================================
+// 📊 Volume (for bonus)
+// =====================================================
+grpVol = "═══ Volume ═══"
+gb_volMult = input.float(1.5, "Vol Break ×", step=0.1, group=grpVol)
+gb_volLen  = input.int(20, "Vol SMA Len", group=grpVol)
+
+gb_volRatio = ta.sma(volume, gb_volLen) != 0 ? volume / ta.sma(volume, gb_volLen) : 0.0
+
+// =====================================================
+// 🎯 CONDITIONS CHECK
+// =====================================================
+gb_valid = gb_enabled and not na(gb_boxHigh) and not na(gb_boxLow) and gb_boxHigh > gb_boxLow
+
+// ── 5 Mandatory ──
+gb_c1_dmi = nz(gb_h4_dip) > nz(gb_h4_dim)                                          // DMI+ > DMI- on 4H
+gb_c2_brk = not na(gb_boxHigh) and nz(gb_h4_close) > gb_boxHigh               // 4H close > Box High
+gb_c3_rsi = gb_c2_brk and not na(gb_rsiRef) and nz(gb_h4_rsi) > gb_rsiRef   // RSI HH (only if break)
+gb_c4_cl1 = not na(gb_ct_1h) and gb_cl_1h > gb_ct_1h                                // Price > Cloud 1H
+gb_c5_cl3 = not na(gb_ct_30m) and gb_cl_30m > gb_ct_30m                              // Price > Cloud 30M
+
+gb_mandatoryCount = (gb_c1_dmi ? 1 : 0) + (gb_c2_brk ? 1 : 0) + (gb_c3_rsi ? 1 : 0) + (gb_c4_cl1 ? 1 : 0) + (gb_c5_cl3 ? 1 : 0)
+gb_entryReady = gb_c1_dmi and gb_c2_brk and gb_c3_rsi and gb_c4_cl1 and gb_c5_cl3
+
+// ── 2 Bonus ──
+gb_b1_vol = gb_volRatio >= gb_volMult
+gb_b2_ret = not na(gb_boxHigh) and low <= gb_boxHigh * 1.005 and low >= gb_boxHigh * 0.985 and close > gb_boxHigh
+
+// =====================================================
+// 📦 BOX DRAWING
+// =====================================================
+gb_boxRange = nz(gb_boxHigh) - nz(gb_boxLow)
+gb_atrVal   = nz(gb_h4_atr, ta.atr(14))
+gb_tpPrice  = nz(gb_boxHigh) + gb_boxRange * gb_tpMult
+gb_slPrice  = nz(gb_boxLow) - gb_atrVal * gb_slAtr
+
+var bool  gb_wasEntryReady = false
+var bool  gb_entryTriggered = false
+var box   gb_theBox = na
+var line  gb_tpLine = na
+var line  gb_slLine = na
+var label gb_entryLabel = na
+
+// Detect first entry ready
+gb_newEntry = gb_valid and gb_entryReady and not gb_wasEntryReady
+if gb_entryReady
+    gb_wasEntryReady := true
+
+// Time-based box display
+gb_inWindow = gb_valid and time >= gb_startDate
+
+// Draw/update box
+if gb_inWindow and barstate.islast
+    // Clean old drawings
+    if not na(gb_theBox)
+        box.delete(gb_theBox)
+    if not na(gb_tpLine)
+        line.delete(gb_tpLine)
+    if not na(gb_slLine)
+        line.delete(gb_slLine)
+
+    // Box color based on status
+    gb_bCol = gb_entryReady ? color.new(#00FF88, 30) : color.new(#FFD700, 40)
+    gb_bgCol = gb_entryReady ? color.new(#00FF88, 85) : color.new(#FFD700, 88)
+    gb_txt = gb_entryReady ? "🎯 ENTRY READY" : "📦 GOLDEN BOX"
+
+    // Find start bar
+    gb_startBar = bar_index
+    for i = 0 to 500
+        if time[i] <= gb_startDate
+            gb_startBar := bar_index - i
+            break
+
+    gb_theBox := box.new(gb_startBar, gb_boxHigh, bar_index + 10, gb_boxLow,
+         border_color=gb_bCol, border_width=2, bgcolor=gb_bgCol,
+         text=gb_txt + " | ★" + str.tostring(gb_score) + "/10",
+         text_color=gb_bCol, text_size=size.small,
+         text_halign=text.align_left, text_valign=text.align_bottom)
+
+    // TP/SL lines
+    if gb_showTP
+        gb_tpLine := line.new(gb_startBar, gb_tpPrice, bar_index + 10, gb_tpPrice,
+             color=gb_entryReady ? color.new(#00E676, 0) : color.new(#00E676, 60),
+             width=2, style=line.style_dashed)
+        gb_slLine := line.new(gb_startBar, gb_slPrice, bar_index + 10, gb_slPrice,
+             color=gb_entryReady ? color.new(#FF1744, 0) : color.new(#FF1744, 60),
+             width=2, style=line.style_dashed)
+
+// ── Entry Label ──
+if gb_newEntry and not gb_entryTriggered
+    gb_entryTriggered := true
+    gb_eP = close
+    gb_rr = math.abs(gb_tpPrice - gb_eP) / math.max(math.abs(gb_eP - gb_slPrice), syminfo.mintick)
+    label.new(bar_index, high + gb_atrVal * 0.8,
+         "🎯 ENTRY READY\n💰 " + str.tostring(gb_eP, format.mintick) +
+         "\n🎯 TP: " + str.tostring(gb_tpPrice, format.mintick) +
+         "\n🛑 SL: " + str.tostring(gb_slPrice, format.mintick) +
+         "\n📊 R:R 1:" + str.tostring(gb_rr, "#.#"),
+         style=label.style_label_down, color=color.new(#00E676, 0),
+         textcolor=color.white, size=size.normal)
+
+// Box High line extended (key level)
+if gb_valid and barstate.islast
+    line.new(bar_index - 200, gb_boxHigh, bar_index + 10, gb_boxHigh,
+         color=color.new(#FFD700, 60), width=1, style=line.style_dotted)
+
+// =====================================================
+// 📊 PANEL
+// =====================================================
+gb_fic(bool c) => c ? "✅" : "❌"
+gb_fib(bool c) => c ? "🟢" : "⚪"
+
+gb_pp = gb_panelPos == "Top Right" ? position.top_right :
+     gb_panelPos == "Bottom Right" ? position.bottom_right :
+     gb_panelPos == "Top Left" ? position.top_left : position.bottom_left
+
+var table gb_tbl = table.new(gb_pp, 3, 18,
+     bgcolor=color.new(#1a1a2e, 5), border_width=1,
+     border_color=color.new(#333355, 0), frame_width=2,
+     frame_color=color.new(#FFD700, 20))
+
+if gb_enabled and gb_showPanel and barstate.islast
+    // Status
+    gb_sC = not gb_found ? color.new(#FF9800, 0) : gb_entryReady ? color.new(#00E676, 0) : gb_mandatoryCount >= 3 ? color.new(#FF9800, 0) : color.new(#FF5252, 0)
+    gb_sT = not gb_found ? "🔍 SEARCHING CANDLE..." : gb_entryReady ? "🎯 ENTRY READY" : "📦 WATCHING (" + str.tostring(gb_mandatoryCount) + "/5)"
+
+    // Header
+    table.cell(gb_tbl, 0, 0, "🎯 GOLDEN BOX ENTRY",
+         text_color=color.new(#FFD700, 0), text_size=size.normal,
+         bgcolor=color.new(#0d0d1a, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 0, 2, 0)
+
+    table.cell(gb_tbl, 0, 1, gb_sT, text_color=gb_sC,
+         text_size=size.small, bgcolor=color.new(#0d0d1a, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 1, 2, 1)
+
+    // ── MEGA BUY Info ──
+    table.cell(gb_tbl, 0, 2, "━━ 📡 MEGA BUY ━━",
+         text_color=color.new(#FFD700, 0), text_size=size.tiny,
+         bgcolor=color.new(#111122, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 2, 2, 2)
+
+    table.cell(gb_tbl, 0, 3, "🔔", text_size=size.tiny, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 3, str.format_time(gb_startDate, "dd/MM HH:mm", syminfo.timezone),
+         text_color=color.new(#FFFFFF, 0), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 3, "★" + str.tostring(gb_score) + "/10",
+         text_color=gb_score >= 9 ? color.new(#00E676, 0) : gb_score >= 7 ? color.new(#FFD700, 0) : color.new(#FF9800, 0),
+         text_size=size.tiny)
+
+    gb_hiS = gb_found ? str.tostring(gb_boxHigh, format.mintick) : "..."
+    gb_loS = gb_found ? str.tostring(gb_boxLow, format.mintick) : "..."
+    table.cell(gb_tbl, 0, 4, gb_found ? "📦" : "🔍", text_size=size.tiny, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 4, gb_hiS + " / " + gb_loS,
+         text_color=gb_found ? color.new(#FF9800, 0) : color.new(#888888, 0),
+         text_size=size.tiny, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 4, gb_found ? "H / L" : "SEARCHING",
+         text_color=gb_found ? color.new(#888888, 0) : color.new(#FF9800, 0), text_size=size.tiny)
+
+    gb_rsiS = gb_found ? str.tostring(gb_rsiRef, "#.#") : "..."
+    table.cell(gb_tbl, 0, 5, "📊", text_size=size.tiny, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 5, "RSI ref: " + gb_rsiS,
+         text_color=color.new(#9C27B0, 0), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 5, gb_found ? "Auto ✅" : "Auto 🔍",
+         text_color=gb_found ? color.new(#00E676, 0) : color.new(#FF9800, 0), text_size=size.tiny)
+
+    // ── Obligatoire ──
+    table.cell(gb_tbl, 0, 6, "━━ OBLIGATOIRE ━━", text_color=color.new(#888888, 0),
+         text_size=size.tiny, bgcolor=color.new(#111122, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 6, 2, 6)
+
+    table.cell(gb_tbl, 0, 7, gb_fic(gb_c1_dmi), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 7, "DMI+ > DMI-",
+         text_color=gb_c1_dmi ? color.new(#00E676, 0) : color.new(#FF5252, 0),
+         text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 7, "4H", text_color=color.new(#888888, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 8, gb_fic(gb_c2_brk), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 8, "Break Box High",
+         text_color=gb_c2_brk ? color.new(#00E676, 0) : color.new(#FF5252, 0),
+         text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 8, "4H", text_color=color.new(#888888, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 9, gb_fic(gb_c3_rsi), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 9, "RSI HH > " + (not na(gb_rsiRef) ? str.tostring(gb_rsiRef, "#.#") : "..."),
+         text_color=gb_c3_rsi ? color.new(#00E676, 0) : color.new(#FF5252, 0),
+         text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 9, "4H", text_color=color.new(#888888, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 10, gb_fic(gb_c4_cl1), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 10, "Prix > Cloud",
+         text_color=gb_c4_cl1 ? color.new(#00E676, 0) : color.new(#FF5252, 0),
+         text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 10, "1H", text_color=color.new(#2196F3, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 11, gb_fic(gb_c5_cl3), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 11, "Prix > Cloud",
+         text_color=gb_c5_cl3 ? color.new(#00E676, 0) : color.new(#FF5252, 0),
+         text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 11, "30M", text_color=color.new(#9C27B0, 0), text_size=size.tiny)
+
+    // ── Bonus ──
+    table.cell(gb_tbl, 0, 12, "━━━ BONUS ━━━", text_color=color.new(#888888, 0),
+         text_size=size.tiny, bgcolor=color.new(#111122, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 12, 2, 12)
+
+    table.cell(gb_tbl, 0, 13, gb_fib(gb_b1_vol), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 13, "Vol " + str.tostring(gb_volRatio, "#.#") + "× avg",
+         text_color=gb_b1_vol ? color.new(#00E676, 0) : color.new(#888888, 0),
+         text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 13, "MTF", text_color=color.new(#888888, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 14, gb_fib(gb_b2_ret), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 14, "Retest Support",
+         text_color=gb_b2_ret ? color.new(#00E676, 0) : color.new(#888888, 0),
+         text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 14, "1H", text_color=color.new(#888888, 0), text_size=size.tiny)
+
+    // ── Live Values ──
+    table.cell(gb_tbl, 0, 15, "━━ VALEURS ━━", text_color=color.new(#888888, 0),
+         text_size=size.tiny, bgcolor=color.new(#111122, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 15, 2, 15)
+
+    gb_inf = "RSI:" + str.tostring(nz(gb_h4_rsi), "#.#") +
+         " | DI+:" + str.tostring(nz(gb_h4_dip), "#.#") +
+         " DI-:" + str.tostring(nz(gb_h4_dim), "#.#")
+    table.cell(gb_tbl, 0, 16, gb_inf, text_color=color.new(#CCCCCC, 0),
+         text_size=size.tiny, bgcolor=color.new(#111122, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 16, 2, 16)
+
+    gb_inf2 = "SB:" + str.tostring(gb_dSk) +
+         " TK:" + str.tostring(gb_dTk) +
+         " KJ:" + str.tostring(gb_dKj) +
+         " | Vol:" + str.tostring(gb_volRatio, "#.#") + "×"
+    table.cell(gb_tbl, 0, 17, gb_inf2, text_color=color.new(#CCCCCC, 0),
+         text_size=size.tiny, bgcolor=color.new(#111122, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 17, 2, 17)
+
+// =====================================================
+// 🔔 Alerts
+// =====================================================
+alertcondition(gb_newEntry, title="🎯 GB Entry Ready",
+     message="🎯 ENTRY READY on {{ticker}} at {{close}}")
+alertcondition(gb_valid and gb_c2_brk and not gb_c2_brk[1], title="📦 Box High Break",
+     message="📦 Box High broken on {{ticker}} at {{close}} (4H)")
+alertcondition(gb_valid and gb_c1_dmi and not gb_c1_dmi[1], title="📊 DMI+ Cross",
+     message="📊 DMI+ crossed above DMI- on {{ticker}} (4H)")

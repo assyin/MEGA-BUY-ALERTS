@@ -1,0 +1,1459 @@
+//@version=6
+indicator("Supertrend + PP ST + RSI + LazyBar + ATR-Vol + SMC + DMI + EC + MSB #ASSYIN-2026 v7",
+          overlay=false, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=4900)
+
+// =====================================================
+// 0) Display Toggles (caché par défaut, calculs toujours actifs)
+// =====================================================
+grpDisplay = "═══ Display Options ═══"
+showSTLines    = input.bool(false, "Show Supertrend Lines",    group=grpDisplay)
+showBuySignals = input.bool(false, "Show BUY Signals on Chart", group=grpDisplay)
+
+// =====================================================
+// 1) Supertrend classique (sur le prix via force_overlay)
+// =====================================================
+atrPeriod1 = input.int(10, "ATR Length (Supertrend)", minval=1, group = "Supertrend")
+factor1    = input.float(3.0, "Factor (Supertrend)", minval=0.01, step=0.01, group = "Supertrend")
+
+[supertrend, direction] = ta.supertrend(factor1, atrPeriod1)
+
+supertrend := barstate.isfirst ? na : supertrend
+
+upTrend    = plot(showSTLines and direction < 0 ? supertrend : na, "ST Up Trend",
+                  color=color.green, style=plot.style_linebr, force_overlay=true)
+downTrend  = plot(showSTLines and direction < 0 ? na : showSTLines ? supertrend : na, "ST Down Trend",
+                  color=color.red,   style=plot.style_linebr, force_overlay=true)
+
+// =====================================================
+// 2) Pivot Point Supertrend (sur le prix)
+// =====================================================
+grpPP = "Pivot Point Supertrend"
+
+prd       = input.int(2,  "Pivot Point Period",        minval=1, maxval=50, group = grpPP)
+factor2   = input.float(3, "ATR Factor (Pivot)",       minval=1, step=0.1,  group = grpPP)
+Pd        = input.int(10, "ATR Period (Pivot)",        minval=1,           group = grpPP)
+showpivot = input.bool(false, "Show Pivot Points",     group = grpPP)
+showlabel = input.bool(true,  "Show Buy/Sell Labels",  group = grpPP)
+showcl    = input.bool(false, "Show PP Center Line",   group = grpPP)
+showsr    = input.bool(false, "Show Support/Resistance", group = grpPP)
+
+float ph_pp = ta.pivothigh(high, prd, prd)
+float pl_pp = ta.pivotlow(low,  prd, prd)
+
+plotshape(showpivot and not na(ph_pp),
+     title="PP Pivot High", text="H",
+     style=shape.labeldown, color=color.new(color.red, 0), textcolor=color.red,
+     location=location.abovebar, offset=-prd, force_overlay=true)
+
+plotshape(showpivot and not na(pl_pp),
+     title="PP Pivot Low", text="L",
+     style=shape.labelup, color=color.new(color.lime, 0), textcolor=color.lime,
+     location=location.belowbar, offset=-prd, force_overlay=true)
+
+var float center = na
+float lastpp = na
+if not na(ph_pp)
+    lastpp := ph_pp
+if not na(pl_pp)
+    lastpp := pl_pp
+
+if not na(lastpp)
+    if na(center)
+        center := lastpp
+    else
+        center := (center * 2 + lastpp) / 3
+
+Up = center - (factor2 * ta.atr(Pd))
+Dn = center + (factor2 * ta.atr(Pd))
+
+var float TUp   = na
+var float TDown = na
+var int   Trend = 1
+
+TUp   := na(TUp[1])   ? Up : (close[1] > TUp[1]   ? math.max(Up, TUp[1])   : Up)
+TDown := na(TDown[1]) ? Dn : (close[1] < TDown[1] ? math.min(Dn, TDown[1]) : Dn)
+
+Trend := close > TDown[1] ? 1 : close < TUp[1] ? -1 : nz(Trend[1], 1)
+Trailingsl = Trend == 1 ? TUp : TDown
+
+linecolor =
+     Trend == 1 and nz(Trend[1]) == 1 ? color.lime :
+     Trend == -1 and nz(Trend[1]) == -1 ? color.red : na
+
+plot(showSTLines ? Trailingsl : na, color=showSTLines ? linecolor : na, linewidth=2, title="PP SuperTrend", force_overlay=true)
+
+plot(showSTLines and showcl ? center : na,
+     title="PP Center",
+     color = showcl ? (center < hl2 ? color.blue : color.red) : na,
+     force_overlay=true)
+
+bsignal = Trend == 1  and Trend[1] == -1
+ssignal = Trend == -1 and Trend[1] == 1
+
+plotshape(showBuySignals and showlabel and bsignal ? Trailingsl : na,
+     title="PP Buy", text="Buy", location=location.absolute,
+     style=shape.labelup, size=size.tiny,
+     color=color.new(color.lime, 0), textcolor=color.black, force_overlay=true)
+
+// PP Sell removed
+
+var float support_pp    = na
+var float resistance_pp = na
+support_pp    := not na(pl_pp) ? pl_pp : support_pp[1]
+resistance_pp := not na(ph_pp) ? ph_pp : resistance_pp[1]
+
+plot(showsr and not na(support_pp) ? support_pp : na,
+     title="PP Support", color = showsr ? color.lime : na,
+     style = plot.style_circles, offset = -prd, force_overlay=true)
+plot(showsr and not na(resistance_pp) ? resistance_pp : na,
+     title="PP Resistance", color = showsr ? color.red : na,
+     style = plot.style_circles, offset = -prd, force_overlay=true)
+
+
+// =====================================================
+// 4) RSI Movement BUY / SELL (pane séparé)
+// =====================================================
+grpRSI = "RSI Movement BUY / SELL"
+
+rsiLength      = input.int(14, "RSI Length",              minval=1,  group=grpRSI)
+rsiSource      = input.source(close, "RSI Source",                   group=grpRSI)
+minRSIMoveBuy  = input.float(12.0, "RSI BUY Min Movement",  step=0.1, group=grpRSI)
+minRSIMoveSell = input.float(14.0, "RSI SELL Min Movement", step=0.1, group=grpRSI)
+showBuy        = input.bool(true,  "Show BUY",                       group=grpRSI)
+showSell       = input.bool(false, "Show SELL",                      group=grpRSI)
+neutralOnly    = input.bool(false, "Neutral mode (single sign)",     group=grpRSI)
+showRSI        = input.bool(true,  "Show RSI Movement",             group=grpRSI)
+
+chg     = ta.change(rsiSource)
+rsiUp   = ta.rma(math.max(chg, 0), rsiLength)
+rsiDown = ta.rma(-math.min(chg, 0), rsiLength)
+rsi     = rsiDown == 0 ? 100 : rsiUp == 0 ? 0 : 100 - (100 / (1 + rsiUp / rsiDown))
+
+plot(showRSI ? rsi : na, "RSI", color=color.rgb(126, 87, 194), linewidth=2)
+hline(70, "RSI 70", color=color.new(color.gray, 70))
+hline(50, "RSI 50", color=color.new(color.gray, 70))
+hline(30, "RSI 30", color=color.new(color.gray, 70))
+
+deltaRSI = rsi - rsi[1]
+
+f_label_rsi(_y, _txt, _col, _style) =>
+    label.new(bar_index, _y, _txt, style=_style, color=_col, textcolor=color.white, size=size.small)
+
+if showRSI
+    if neutralOnly
+        if math.abs(deltaRSI) >= math.min(minRSIMoveBuy, minRSIMoveSell)
+            f_label_rsi(rsi, str.tostring(math.abs(deltaRSI), "#.##"),
+                color.rgb(126, 87, 194), label.style_label_down)
+    else
+        if deltaRSI >= minRSIMoveBuy and showBuy
+            f_label_rsi(rsi, "BUY " + str.tostring(deltaRSI, "#.##"),
+                color.green, label.style_label_up)
+
+// =====================================================
+// 5) BT LAZYBAR (pane séparé partagé)
+// =====================================================
+grpLB = "BT LazyBar"
+
+showLazyBar    = input.bool(true,  "Show LazyBar",          group=grpLB)
+lbSpikeThresh8 = input.float(8.0,  "Spike threshold (red)",   step=0.5, group=grpLB)
+lbSpikeThresh7 = input.float(7.0,  "Spike threshold (yellow-green)", step=0.5, group=grpLB)
+lbSpikeThresh6 = input.float(6.0,  "Spike threshold (purple)", step=0.5, group=grpLB)
+
+lbMiddle = (high + low + high[1] + low[1] + high[2] + low[2] + high[3] + low[3] + high[4] + low[4]) / 10
+lbScale  = ((high - low) + (high[1] - low[1]) + (high[2] - low[2]) + (high[3] - low[3]) + (high[4] - low[4])) / 5 * 0.2
+
+ht = lbScale != 0 ? (close - lbMiddle) / lbScale : 0
+
+plot(showLazyBar ? ht : na, "LazyBar", color=color.gray, linewidth=2)
+hline(0, "LB Zero", color=color.new(color.gray, 80))
+
+if showLazyBar
+    abs_ht = math.abs(ht)
+    if abs_ht >= 16
+        label.new(bar_index, ht, "16", color=color.fuchsia, textcolor=color.white, style=label.style_label_down, size=size.small)
+    else if abs_ht >= 15
+        label.new(bar_index, ht, "15", color=color.purple, textcolor=color.white, style=label.style_label_down, size=size.small)
+    else if abs_ht >= 14
+        label.new(bar_index, ht, "14", color=color.blue, textcolor=color.white, style=label.style_label_down, size=size.small)
+    else if abs_ht >= 13
+        label.new(bar_index, ht, "13", color=color.navy, textcolor=color.white, style=label.style_label_down, size=size.small)
+    else if abs_ht >= 12
+        label.new(bar_index, ht, "12", color=color.red, textcolor=color.white, style=label.style_label_down, size=size.small)
+    else if abs_ht >= 11
+        label.new(bar_index, ht, "11", color=color.orange, textcolor=color.white, style=label.style_label_down, size=size.small)
+    else if abs_ht >= 10
+        label.new(bar_index, ht, "10", color=color.yellow, textcolor=color.black, style=label.style_label_down, size=size.small)
+    else if abs_ht >= 9.6
+        label.new(bar_index, ht, "9.6", color=color.aqua, textcolor=color.black, style=label.style_label_down, size=size.small)
+
+if showLazyBar
+    if math.abs(ht - ht[1]) >= lbSpikeThresh8
+        line.new(bar_index[1], ht[1], bar_index, ht, xloc.bar_index, extend.none, color.rgb(255, 0, 0), width=2)
+    else if math.abs(ht - ht[1]) >= lbSpikeThresh7
+        line.new(bar_index[1], ht[1], bar_index, ht, xloc.bar_index, extend.none, color.rgb(200, 255, 0), width=2)
+    else if math.abs(ht - ht[1]) >= lbSpikeThresh6
+        line.new(bar_index[1], ht[1], bar_index, ht, xloc.bar_index, extend.none, color.rgb(176, 6, 255), width=2)
+
+// =====================================================
+// 6) ATR + Volume Regime Combined (pane séparé partagé)
+// =====================================================
+grpAV = "ATR + Volume Regime"
+
+showATRVol     = input.bool(true,   "Show ATR + Volume Regime", group=grpAV)
+avAtrLength    = input.int(14,      "ATR Length",               group=grpAV)
+avAtrSmooth    = input.int(10,      "ATR Smoothing",            group=grpAV)
+avAtrThreshold = input.float(1.2,   "ATR Expansion Threshold",  step=0.1, group=grpAV)
+avVolLen       = input.int(20,      "Volume MA Length",          group=grpAV)
+avVolThreshold = input.float(1.5,   "Volume Expansion Threshold", step=0.1, group=grpAV)
+avMinMove      = input.float(250.0, "Min Movement (%)",         step=0.1, group=grpAV)
+avShowRedSigns = input.bool(false,  "Show Red Labels (Volume Decrease)", group=grpAV)
+
+avAtrRaw   = ta.rma(ta.tr(true), avAtrLength)
+avAtr      = ta.ema(avAtrRaw, avAtrSmooth)
+avAtrSlope = (avAtr - avAtr[1]) / avAtr[1] * 100
+
+var int avAtrRegime = 0
+if avAtrSlope > avAtrThreshold
+    avAtrRegime := 1
+else if avAtrSlope < -avAtrThreshold
+    avAtrRegime := -1
+
+avVolMA    = ta.sma(volume, avVolLen)
+avVolRatio = avVolMA != 0 ? volume / avVolMA : 0
+avVolChange = avVolMA != 0 ? (volume - volume[1]) / avVolMA * 100 : 0
+avVolMove   = math.abs(avVolChange)
+
+var int avVolRegime = 0
+if avVolRatio > avVolThreshold
+    avVolRegime := 1
+else if avVolRatio < 0.8
+    avVolRegime := -1
+
+var int avRegime = 0
+if avAtrRegime == 1 and avVolRegime == 1
+    avRegime := 1
+else if avAtrRegime == -1 and avVolRegime == -1
+    avRegime := -1
+else
+    avRegime := 0
+
+bgcolor(
+     showATRVol and avRegime == 1  ? color.new(color.green, 85) :
+     showATRVol and avRegime == -1 ? color.new(color.red,   85) : na)
+
+plot(showATRVol ? avAtr : na, "ATR", color=color.white, linewidth=2)
+plot(showATRVol ? avVolRatio : na, "Volume Ratio", color=color.yellow, linewidth=1)
+hline(1, "Vol Baseline", color=color.new(color.gray, 80))
+
+if showATRVol and avVolMove >= avMinMove
+    if avVolChange > 0
+        label.new(bar_index, avVolRatio, str.tostring(avVolMove, "#.##") + "%",
+             style=label.style_label_up, color=color.green,
+             textcolor=color.white, size=size.small)
+    else if avShowRedSigns
+        label.new(bar_index, avVolRatio, str.tostring(avVolMove, "#.##") + "%",
+             style=label.style_label_down, color=color.red,
+             textcolor=color.white, size=size.small)
+
+// =====================================================
+// 7) SMC Structures (sur le prix via force_overlay)
+// =====================================================
+
+smc_delete_line_label(line ln, label lb) =>
+    if not na(ln)
+        line.delete(ln)
+    if not na(lb)
+        label.delete(lb)
+
+smc_getLineStyle(lineOption) =>
+    lineOption == "┈" ? line.style_dotted : lineOption == "╌" ? line.style_dashed : line.style_solid
+
+smc_get_structure_highest_bar(lookback) =>
+    var int idx = 0
+    maxBar = bar_index > lookback ? ta.highestbars(high, lookback) : ta.highestbars(high, bar_index + 1)
+    for i = 0 to lookback - 1 by 1
+        if high[i+1] > high[i+2] and high[i] <= high[i+1] and ((i+1) * -1) >= maxBar
+            idx := (i+1) * -1
+    idx := idx == 0 ? maxBar : idx
+
+smc_get_structure_lowest_bar(lookback) =>
+    var int idx = 0
+    minBar = bar_index > lookback ? ta.lowestbars(low, lookback) : ta.lowestbars(low, bar_index + 1)
+    for i = 0 to lookback - 1 by 1
+        if low[i+1] < low[i+2] and low[i] >= low[i+1] and ((i+1) * -1) >= minBar
+            idx := (i+1) * -1
+    idx := idx == 0 ? minBar : idx
+
+smc_FVGDraw(_boxes, _fvgTypes, _isFvgMitigated, _fvgLabels, _mitigatedFvgColor, _isMitigatedFvgToReduce) =>
+    for [index, value] in _boxes
+        if array.get(_fvgTypes, index)
+            if low <= box.get_bottom(value)
+                array.remove(_boxes, index)
+                array.remove(_fvgTypes, index)
+                array.remove(_isFvgMitigated, index)
+                label.delete(array.get(_fvgLabels, index))
+                array.remove(_fvgLabels, index)
+                box.delete(value)
+            else
+                if low < box.get_top(value)
+                    box.set_bgcolor(value, _mitigatedFvgColor)
+                    if not array.get(_isFvgMitigated, index)
+                        alert("FVG has been mitigated", alert.freq_once_per_bar)
+                        array.set(_isFvgMitigated, index, true)
+                    if _isMitigatedFvgToReduce
+                        box.set_top(value, low)
+                box.set_right(value, bar_index)
+                label.set_x(array.get(_fvgLabels, index), (box.get_left(value) + box.get_right(value)) / 2)
+                label.set_y(array.get(_fvgLabels, index), box.get_top(value) - (box.get_top(value) - box.get_bottom(value)) / 2)
+        else
+            if high >= box.get_top(value)
+                array.remove(_boxes, index)
+                array.remove(_fvgTypes, index)
+                array.remove(_isFvgMitigated, index)
+                label.delete(array.get(_fvgLabels, index))
+                array.remove(_fvgLabels, index)
+                box.delete(value)
+            else
+                if high > box.get_bottom(value)
+                    box.set_bgcolor(value, _mitigatedFvgColor)
+                    if not array.get(_isFvgMitigated, index)
+                        alert("FVG has been mitigated", alert.freq_once_per_bar)
+                        array.set(_isFvgMitigated, index, true)
+                    if _isMitigatedFvgToReduce
+                        box.set_bottom(value, high)
+                box.set_right(value, bar_index)
+                label.set_x(array.get(_fvgLabels, index), (box.get_left(value) + box.get_right(value)) / 2)
+                label.set_y(array.get(_fvgLabels, index), box.get_top(value) - (box.get_top(value) - box.get_bottom(value)) / 2)
+
+grpFVG = "SMC – Fair Value Gap"
+isFvgToShow           = input.bool(false, "Display FVG", group=grpFVG)
+bullishFvgColor       = input.color(color.new(color.green, 50), "Bullish FVG Color", group=grpFVG)
+bearishFvgColor       = input.color(color.new(color.red, 50),   "Bearish FVG Color", group=grpFVG)
+mitigatedFvgColor     = input.color(color.new(color.gray, 50),  "Mitigated FVG Color", group=grpFVG)
+fvgHistoryNbr         = input.int(5, "Number of FVG to show", minval=1, maxval=50, group=grpFVG)
+isMitigatedFvgToReduce = input.bool(false, "Reduce mitigated FVG", group=grpFVG)
+
+grpSMC = "SMC – Structures"
+isStructBodyCandleBreak  = input.bool(true,  "Break with candle's body",    group=grpSMC)
+isCurrentStructToShow    = input.bool(true,  "Display current structure",   group=grpSMC)
+bullishBosColor          = input.color(color.silver, "Bullish BOS Color",   group=grpSMC)
+bearishBosColor          = input.color(color.silver, "Bearish BOS Color",   group=grpSMC)
+smcBosLineStyleOption    = input.string("─", "BOS Style", options=["─", "┈", "╌"], group=grpSMC)
+smcBosLineStyle          = smc_getLineStyle(smcBosLineStyleOption)
+smcBosLineWidth          = input.int(1, "BOS Width", minval=1, maxval=5, group=grpSMC)
+bullishChochColor        = input.color(color.yellow, "Bullish CHoCH Color", group=grpSMC)
+bearishChochColor        = input.color(color.yellow, "Bearish CHoCH Color", group=grpSMC)
+smcChochLineStyleOption  = input.string("─", "CHoCH Style", options=["─", "┈", "╌"], group=grpSMC)
+smcChochLineStyle        = smc_getLineStyle(smcChochLineStyleOption)
+smcChochLineWidth        = input.int(1, "MSB Width", minval=1, maxval=5, group=grpSMC)
+currentStructColor       = input.color(color.blue, "Current structure Color", group=grpSMC)
+smcCurStructStyleOption  = input.string("─", "Current structure Style", options=["─", "┈", "╌"], group=grpSMC)
+smcCurStructLineStyle    = smc_getLineStyle(smcCurStructStyleOption)
+smcCurStructLineWidth    = input.int(1, "Current structure Width", minval=1, maxval=5, group=grpSMC)
+structHistoryNbr         = input.int(10, "Number of break to show", minval=1, maxval=50, group=grpSMC)
+
+grpFib = "SMC – Structure Fibonacci"
+isFibo1ToShow = input.bool(false, "", group=grpFib, inline="F1")
+fibo1Value    = input.float(0.786, "", group=grpFib, inline="F1")
+fibo1Color    = input.color(#64b5f6, "", group=grpFib, inline="F1")
+fibo1StyleOpt = input.string("─", "", options=["─", "┈", "╌"], group=grpFib, inline="F1")
+fibo1Style    = smc_getLineStyle(fibo1StyleOpt)
+fibo1LineWidth = input.int(1, "", minval=1, maxval=5, group=grpFib, inline="F1")
+
+isFibo2ToShow = input.bool(false, "", group=grpFib, inline="F2")
+fibo2Value    = input.float(0.705, "", group=grpFib, inline="F2")
+fibo2Color    = input.color(#f23645, "", group=grpFib, inline="F2")
+fibo2StyleOpt = input.string("─", "", options=["─", "┈", "╌"], group=grpFib, inline="F2")
+fibo2Style    = smc_getLineStyle(fibo2StyleOpt)
+fibo2LineWidth = input.int(1, "", minval=1, maxval=5, group=grpFib, inline="F2")
+
+isFibo3ToShow = input.bool(false, "", group=grpFib, inline="F3")
+fibo3Value    = input.float(0.618, "", group=grpFib, inline="F3")
+fibo3Color    = input.color(#089981, "", group=grpFib, inline="F3")
+fibo3StyleOpt = input.string("─", "", options=["─", "┈", "╌"], group=grpFib, inline="F3")
+fibo3Style    = smc_getLineStyle(fibo3StyleOpt)
+fibo3LineWidth = input.int(1, "", minval=1, maxval=5, group=grpFib, inline="F3")
+
+isFibo4ToShow = input.bool(false, "", group=grpFib, inline="F4")
+fibo4Value    = input.float(0.5, "", group=grpFib, inline="F4")
+fibo4Color    = input.color(#4caf50, "", group=grpFib, inline="F4")
+fibo4StyleOpt = input.string("─", "", options=["─", "┈", "╌"], group=grpFib, inline="F4")
+fibo4Style    = smc_getLineStyle(fibo4StyleOpt)
+fibo4LineWidth = input.int(1, "", minval=1, maxval=5, group=grpFib, inline="F4")
+
+isFibo5ToShow = input.bool(false, "", group=grpFib, inline="F5")
+fibo5Value    = input.float(0.382, "", group=grpFib, inline="F5")
+fibo5Color    = input.color(#81c784, "", group=grpFib, inline="F5")
+fibo5StyleOpt = input.string("─", "", options=["─", "┈", "╌"], group=grpFib, inline="F5")
+fibo5Style    = smc_getLineStyle(fibo5StyleOpt)
+fibo5LineWidth = input.int(1, "", minval=1, maxval=5, group=grpFib, inline="F5")
+
+var array<line>  smcStructureLines  = array.new_line(0)
+var array<label> smcStructureLabels = array.new_label(0)
+var array<box>   smcFvgBoxes        = array.new_box(0)
+var array<bool>  smcFvgTypes        = array.new_bool(0)
+var array<label> smcFvgLabels       = array.new_label(0)
+var array<bool>  smcIsFvgMitigated  = array.new_bool(0)
+
+var float smcStructureHigh = 0.0
+var float smcStructureLow  = 0.0
+var float smcFibo1Price = 0.0
+var float smcFibo2Price = 0.0
+var float smcFibo3Price = 0.0
+var float smcFibo4Price = 0.0
+var float smcFibo5Price = 0.0
+
+var int smcStructureHighStartIndex = 0
+var int smcStructureLowStartIndex  = 0
+var int smcStructureDirection      = 0
+var int smcFibo1StartIndex = 0
+var int smcFibo2StartIndex = 0
+var int smcFibo3StartIndex = 0
+var int smcFibo4StartIndex = 0
+var int smcFibo5StartIndex = 0
+
+var line  smcStructureHighLine = na
+var line  smcStructureLowLine  = na
+var line  smcFibo1Line = na
+var line  smcFibo2Line = na
+var line  smcFibo3Line = na
+var line  smcFibo4Line = na
+var line  smcFibo5Line = na
+var label smcFibo1Label = na
+var label smcFibo2Label = na
+var label smcFibo3Label = na
+var label smcFibo4Label = na
+var label smcFibo5Label = na
+
+var bool smcIsBOSAlert   = false
+var bool smcIsCHOCHAlert = false
+
+smcIsBullishFVG = high[3] < low[1]
+smcIsBearishFVG = low[3] > high[1]
+
+if smcIsBullishFVG and isFvgToShow
+    box _box = box.new(left=bar_index - 2, top=low[1], right=bar_index[1], bottom=high[3],
+                        border_style=line.style_solid, border_width=1,
+                        bgcolor=bullishFvgColor, border_color=color.new(color.green, 100), force_overlay=true)
+    label _label = label.new(math.ceil((_box.get_left() + _box.get_right()) / 2),
+                              _box.get_top() - (_box.get_top() - _box.get_bottom()) / 2,
+                              text="FVG", style=label.style_none, textcolor=color.white, force_overlay=true)
+    array.push(smcFvgBoxes, _box)
+    array.push(smcFvgTypes, true)
+    array.push(smcIsFvgMitigated, false)
+    array.push(smcFvgLabels, _label)
+    if array.size(smcFvgBoxes) > fvgHistoryNbr + 1
+        box.delete(array.get(smcFvgBoxes, 0))
+        label.delete(array.get(smcFvgLabels, 0))
+        array.remove(smcFvgLabels, 0)
+        array.remove(smcFvgBoxes, 0)
+        array.remove(smcFvgTypes, 0)
+        array.remove(smcIsFvgMitigated, 0)
+
+if smcIsBearishFVG and isFvgToShow
+    box _box = box.new(left=bar_index - 2, top=low[3], right=bar_index[1], bottom=high[1],
+                        border_style=line.style_solid, border_width=1,
+                        bgcolor=bearishFvgColor, border_color=color.new(color.red, 100), force_overlay=true)
+    label _label = label.new(math.ceil((_box.get_left() + _box.get_right()) / 2),
+                              _box.get_top() - (_box.get_top() - _box.get_bottom()) / 2,
+                              text="FVG", style=label.style_none, textcolor=color.white, force_overlay=true)
+    array.push(smcFvgBoxes, _box)
+    array.push(smcFvgTypes, false)
+    array.push(smcIsFvgMitigated, false)
+    array.push(smcFvgLabels, _label)
+    if array.size(smcFvgBoxes) > fvgHistoryNbr + 1
+        box.delete(array.get(smcFvgBoxes, 0))
+        label.delete(array.get(smcFvgLabels, 0))
+        array.remove(smcFvgLabels, 0)
+        array.remove(smcFvgBoxes, 0)
+        array.remove(smcFvgTypes, 0)
+        array.remove(smcIsFvgMitigated, 0)
+
+smc_FVGDraw(smcFvgBoxes, smcFvgTypes, smcIsFvgMitigated, smcFvgLabels, mitigatedFvgColor, isMitigatedFvgToReduce)
+
+if bar_index == 0
+    smcStructureHighStartIndex := bar_index
+    smcStructureLowStartIndex  := bar_index
+    smcStructureHigh := high
+    smcStructureLow  := low
+
+smcHighest    = bar_index > 10 ? ta.highest(10) : ta.highest(bar_index + 1)
+smcHighestBar = bar_index > 10 ? ta.highestbars(high, 10) : ta.highestbars(high, bar_index + 1)
+smcLowest     = bar_index > 10 ? ta.lowest(10) : ta.lowest(bar_index + 1)
+smcLowestBar  = bar_index > 10 ? ta.lowestbars(low, 10) : ta.lowestbars(low, bar_index + 1)
+smcStructureMaxBar = bar_index + smc_get_structure_highest_bar(10)
+smcStructureMinBar = bar_index + smc_get_structure_lowest_bar(10)
+
+smcLowBreakPrice  = isStructBodyCandleBreak ? close : low
+smcHighBreakPrice = isStructBodyCandleBreak ? close : high
+
+smcIsLowBroken = (smcLowBreakPrice < smcStructureLow and smcLowBreakPrice[1] >= smcStructureLow and smcLowBreakPrice[2] >= smcStructureLow and smcLowBreakPrice[3] >= smcStructureLow and bar_index[1] > smcStructureLowStartIndex and bar_index[2] > smcStructureLowStartIndex and bar_index[3] > smcStructureLowStartIndex) or (smcStructureDirection == 2 and smcLowBreakPrice < smcStructureLow)
+smcIsHighBroken = (smcHighBreakPrice > smcStructureHigh and smcHighBreakPrice[1] <= smcStructureHigh and smcHighBreakPrice[2] <= smcStructureHigh and smcHighBreakPrice[3] <= smcStructureHigh and bar_index[1] > smcStructureHighStartIndex and bar_index[2] > smcStructureHighStartIndex and bar_index[3] > smcStructureHighStartIndex) or (smcStructureDirection == 1 and smcHighBreakPrice > smcStructureHigh)
+
+if smcIsLowBroken
+    if array.size(smcStructureLines) >= structHistoryNbr
+        smc_delete_line_label(array.get(smcStructureLines, 0), array.get(smcStructureLabels, 0))
+        array.remove(smcStructureLabels, 0)
+        array.remove(smcStructureLines, 0)
+    if smcStructureDirection == 1
+        array.push(smcStructureLines, line.new(smcStructureLowStartIndex, smcStructureLow, bar_index, smcStructureLow, xloc=xloc.bar_index, extend=extend.none, color=bearishBosColor, style=smcBosLineStyle, width=smcBosLineWidth, force_overlay=true))
+        array.push(smcStructureLabels, label.new((bar_index + smcStructureLowStartIndex) / 2, smcStructureLow, text="BOS", style=label.style_none, textcolor=bearishBosColor, force_overlay=true))
+        smcIsBOSAlert := true
+    else
+        array.push(smcStructureLines, line.new(smcStructureLowStartIndex, smcStructureLow, bar_index, smcStructureLow, xloc=xloc.bar_index, extend=extend.none, color=bearishChochColor, style=smcChochLineStyle, width=smcChochLineWidth, force_overlay=true))
+        array.push(smcStructureLabels, label.new((bar_index + smcStructureLowStartIndex) / 2, smcStructureLow, text="CHoCH", style=label.style_none, textcolor=bearishChochColor, force_overlay=true))
+        smcIsCHOCHAlert := true
+    smcStructureDirection := 1
+    smcStructureHighStartIndex := smcStructureMaxBar
+    smcStructureLowStartIndex  := bar_index
+    smcStructureHigh := high[bar_index - smcStructureHighStartIndex]
+    smcStructureLow  := low
+else if smcIsHighBroken
+    if array.size(smcStructureLines) >= structHistoryNbr
+        smc_delete_line_label(array.get(smcStructureLines, 0), array.get(smcStructureLabels, 0))
+        array.remove(smcStructureLabels, 0)
+        array.remove(smcStructureLines, 0)
+    if smcStructureDirection == 2
+        array.push(smcStructureLines, line.new(smcStructureHighStartIndex, smcStructureHigh, bar_index, smcStructureHigh, xloc=xloc.bar_index, extend=extend.none, color=bullishBosColor, style=smcBosLineStyle, width=smcBosLineWidth, force_overlay=true))
+        array.push(smcStructureLabels, label.new((bar_index + smcStructureHighStartIndex) / 2, smcStructureHigh, text="BOS", style=label.style_none, textcolor=bullishBosColor, force_overlay=true))
+        smcIsBOSAlert := true
+    else
+        array.push(smcStructureLines, line.new(smcStructureHighStartIndex, smcStructureHigh, bar_index, smcStructureHigh, xloc=xloc.bar_index, extend=extend.none, color=bullishChochColor, style=smcChochLineStyle, width=smcChochLineWidth, force_overlay=true))
+        array.push(smcStructureLabels, label.new((bar_index + smcStructureHighStartIndex) / 2, smcStructureHigh, text="CHoCH", style=label.style_none, textcolor=bullishChochColor, force_overlay=true))
+        smcIsCHOCHAlert := true
+    smcStructureDirection := 2
+    smcStructureHighStartIndex := bar_index
+    smcStructureLowStartIndex  := smcStructureMinBar
+    smcStructureHigh := high
+    smcStructureLow  := low[bar_index - smcStructureLowStartIndex]
+else
+    smcIsBOSAlert   := false
+    smcIsCHOCHAlert := false
+    if high > smcStructureHigh and (smcStructureDirection == 0 or smcStructureDirection == 2)
+        if not isStructBodyCandleBreak or not (isStructBodyCandleBreak and bar_index[1] > smcStructureHighStartIndex and bar_index[2] > smcStructureHighStartIndex and bar_index[3] > smcStructureHighStartIndex)
+            smcStructureHigh := high
+            smcStructureHighStartIndex := bar_index
+    else if low < smcStructureLow and (smcStructureDirection == 0 or smcStructureDirection == 1)
+        if not isStructBodyCandleBreak or not (isStructBodyCandleBreak and bar_index[1] > smcStructureLowStartIndex and bar_index[2] > smcStructureLowStartIndex and bar_index[3] > smcStructureLowStartIndex)
+            smcStructureLow := low
+            smcStructureLowStartIndex := bar_index
+
+smcStructureRange = math.abs(smcStructureHigh - smcStructureLow)
+
+if isCurrentStructToShow
+    smc_delete_line_label(smcStructureHighLine, label(na))
+    smc_delete_line_label(smcStructureLowLine, label(na))
+    smcStructureHighLine := line.new(smcStructureHighStartIndex, smcStructureHigh, bar_index, smcStructureHigh, xloc.bar_index, color=currentStructColor, style=smcCurStructLineStyle, width=smcCurStructLineWidth, force_overlay=true)
+    smcStructureLowLine  := line.new(smcStructureLowStartIndex, smcStructureLow, bar_index, smcStructureLow, xloc.bar_index, color=currentStructColor, style=smcCurStructLineStyle, width=smcCurStructLineWidth, force_overlay=true)
+
+    if isFibo1ToShow
+        smc_delete_line_label(smcFibo1Line, smcFibo1Label)
+        smcFibo1Price := smcStructureDirection == 1 ? smcStructureHigh - (smcStructureRange - smcStructureRange * fibo1Value) : smcStructureLow + (smcStructureRange - smcStructureRange * fibo1Value)
+        smcFibo1StartIndex := smcStructureDirection == 1 ? smcStructureHighStartIndex : smcStructureLowStartIndex
+        smcFibo1Line  := line.new(smcFibo1StartIndex, smcFibo1Price, bar_index, smcFibo1Price, xloc.bar_index, color=fibo1Color, style=fibo1Style, width=fibo1LineWidth, force_overlay=true)
+        smcFibo1Label := label.new(bar_index + 20, smcFibo1Price, text=str.tostring(fibo1Value) + "(" + str.tostring(smcFibo1Price) + ")", style=label.style_none, textcolor=fibo1Color, force_overlay=true)
+    if isFibo2ToShow
+        smc_delete_line_label(smcFibo2Line, smcFibo2Label)
+        smcFibo2Price := smcStructureDirection == 1 ? smcStructureHigh - (smcStructureRange - smcStructureRange * fibo2Value) : smcStructureLow + (smcStructureRange - smcStructureRange * fibo2Value)
+        smcFibo2StartIndex := smcStructureDirection == 1 ? smcStructureHighStartIndex : smcStructureLowStartIndex
+        smcFibo2Line  := line.new(smcFibo2StartIndex, smcFibo2Price, bar_index, smcFibo2Price, xloc.bar_index, color=fibo2Color, style=fibo2Style, width=fibo2LineWidth, force_overlay=true)
+        smcFibo2Label := label.new(bar_index + 20, smcFibo2Price, text=str.tostring(fibo2Value) + "(" + str.tostring(smcFibo2Price) + ")", style=label.style_none, textcolor=fibo2Color, force_overlay=true)
+    if isFibo3ToShow
+        smc_delete_line_label(smcFibo3Line, smcFibo3Label)
+        smcFibo3Price := smcStructureDirection == 1 ? smcStructureHigh - (smcStructureRange - smcStructureRange * fibo3Value) : smcStructureLow + (smcStructureRange - smcStructureRange * fibo3Value)
+        smcFibo3StartIndex := smcStructureDirection == 1 ? smcStructureHighStartIndex : smcStructureLowStartIndex
+        smcFibo3Line  := line.new(smcFibo3StartIndex, smcFibo3Price, bar_index, smcFibo3Price, xloc.bar_index, color=fibo3Color, style=fibo3Style, width=fibo3LineWidth, force_overlay=true)
+        smcFibo3Label := label.new(bar_index + 20, smcFibo3Price, text=str.tostring(fibo3Value) + "(" + str.tostring(smcFibo3Price) + ")", style=label.style_none, textcolor=fibo3Color, force_overlay=true)
+    if isFibo4ToShow
+        smc_delete_line_label(smcFibo4Line, smcFibo4Label)
+        smcFibo4Price := smcStructureDirection == 1 ? smcStructureHigh - (smcStructureRange - smcStructureRange * fibo4Value) : smcStructureLow + (smcStructureRange - smcStructureRange * fibo4Value)
+        smcFibo4StartIndex := smcStructureDirection == 1 ? smcStructureHighStartIndex : smcStructureLowStartIndex
+        smcFibo4Line  := line.new(smcFibo4StartIndex, smcFibo4Price, bar_index, smcFibo4Price, xloc.bar_index, color=fibo4Color, style=fibo4Style, width=fibo4LineWidth, force_overlay=true)
+        smcFibo4Label := label.new(bar_index + 20, smcFibo4Price, text=str.tostring(fibo4Value) + "(" + str.tostring(smcFibo4Price) + ")", style=label.style_none, textcolor=fibo4Color, force_overlay=true)
+    if isFibo5ToShow
+        smc_delete_line_label(smcFibo5Line, smcFibo5Label)
+        smcFibo5Price := smcStructureDirection == 1 ? smcStructureHigh - (smcStructureRange - smcStructureRange * fibo5Value) : smcStructureLow + (smcStructureRange - smcStructureRange * fibo5Value)
+        smcFibo5StartIndex := smcStructureDirection == 1 ? smcStructureHighStartIndex : smcStructureLowStartIndex
+        smcFibo5Line  := line.new(smcFibo5StartIndex, smcFibo5Price, bar_index, smcFibo5Price, xloc.bar_index, color=fibo5Color, style=fibo5Style, width=fibo5LineWidth, force_overlay=true)
+        smcFibo5Label := label.new(bar_index + 20, smcFibo5Price, text=str.tostring(fibo5Value) + "(" + str.tostring(smcFibo5Price) + ")", style=label.style_none, textcolor=fibo5Color, force_overlay=true)
+
+// =====================================================
+// 8) DMI – BUY / SELL Movement Triggers
+// =====================================================
+grpDMI = "DMI Movement Triggers"
+
+showDMI        = input.bool(true,   "Show DMI",                     group=grpDMI)
+dmiLen         = input.int(14,      "DI Length",                     group=grpDMI)
+dmiLenSig      = input.int(14,      "ADX Smoothing",                group=grpDMI)
+dmiMinMovePlus = input.float(10.0,  "+DI Min Movement (BLUE)",  step=0.5, group=grpDMI)
+dmiMinMoveMinus= input.float(8.0,   "-DI Min Movement (ORANGE)",step=0.5, group=grpDMI)
+dmiMinMoveADX  = input.float(3.0,   "ADX Min Movement (RED)",   step=0.5, group=grpDMI)
+dmiShowBuy     = input.bool(true,   "Show BUY signals",             group=grpDMI)
+dmiShowSell    = input.bool(false,  "Show SELL signals",            group=grpDMI)
+dmiNeutralOnly = input.bool(false,  "Neutral mode (single sign)",   group=grpDMI)
+
+dmiUp      = ta.change(high)
+dmiDown    = -ta.change(low)
+dmiPlusDM  = dmiUp > dmiDown and dmiUp > 0 ? dmiUp : 0
+dmiMinusDM = dmiDown > dmiUp and dmiDown > 0 ? dmiDown : 0
+
+dmiTrur  = ta.rma(ta.tr, dmiLen)
+dmiPlus  = fixnan(100 * ta.rma(dmiPlusDM, dmiLen)  / dmiTrur)
+dmiMinus = fixnan(100 * ta.rma(dmiMinusDM, dmiLen) / dmiTrur)
+dmiSum   = dmiPlus + dmiMinus
+dmiAdx   = 100 * ta.rma(math.abs(dmiPlus - dmiMinus) / (dmiSum == 0 ? 1 : dmiSum), dmiLenSig)
+
+dmiDPlus  = dmiPlus  - dmiPlus[1]
+dmiDMinus = dmiMinus - dmiMinus[1]
+dmiDAdx   = dmiAdx   - dmiAdx[1]
+dmiMPlus  = math.abs(dmiDPlus)
+dmiMMinus = math.abs(dmiDMinus)
+dmiMAdx   = math.abs(dmiDAdx)
+
+if showBuySignals and showDMI and dmiMPlus >= dmiMinMovePlus
+    if dmiNeutralOnly
+        label.new(bar_index, high, "DI+ " + str.tostring(dmiMPlus, "#.##"),
+            style=label.style_label_down, color=#2962FF, textcolor=color.white, size=size.tiny, force_overlay=true)
+    else
+        if dmiDPlus > 0 and dmiShowBuy
+            label.new(bar_index, low, "DI+ B " + str.tostring(dmiMPlus, "#.##"),
+                style=label.style_label_up, color=#2962FF, textcolor=color.white, size=size.tiny, force_overlay=true)
+
+if showBuySignals and showDMI and dmiMMinus >= dmiMinMoveMinus
+    if dmiNeutralOnly
+        label.new(bar_index, high, "DI- " + str.tostring(dmiMMinus, "#.##"),
+            style=label.style_label_down, color=#FF6D00, textcolor=color.white, size=size.tiny, force_overlay=true)
+    else
+        if dmiDMinus < 0 and dmiShowBuy
+            label.new(bar_index, low, "DI- B " + str.tostring(dmiMMinus, "#.##"),
+                style=label.style_label_up, color=#FF6D00, textcolor=color.white, size=size.tiny, force_overlay=true)
+
+if showBuySignals and showDMI and dmiMAdx >= dmiMinMoveADX
+    label.new(bar_index, high, "STR " + str.tostring(dmiMAdx, "#.##"),
+        style=label.style_label_down, color=#F50057, textcolor=color.white, size=size.tiny, force_overlay=true)
+
+// =====================================================
+// 9) ASSYIN - Supertrend & BUY Signal (sur le prix)
+// =====================================================
+grpAST = "ASSYIN Supertrend"
+
+showAST       = input.bool(true, "Show ASSYIN Supertrend",       group=grpAST)
+astFactor     = input.float(3.0, "Supertrend Factor", minval=1.0, maxval=5.0, step=0.1, group=grpAST)
+astPeriod     = input.int(10,    "Supertrend ATR Period", minval=5, maxval=30, group=grpAST)
+
+astColLong  = #089981
+astColShort = #f23645
+
+astAtr         = ta.atr(astPeriod)
+astHl2         = (high + low) / 2
+astUpperRaw    = astHl2 + (astFactor * astAtr)
+astLowerRaw    = astHl2 - (astFactor * astAtr)
+
+var float astUpper = na
+var float astLower = na
+var int   astDir   = 1
+
+astPrevUpper = nz(astUpper[1], astUpperRaw)
+astPrevLower = nz(astLower[1], astLowerRaw)
+astPrevDir   = nz(astDir[1], 1)
+
+astLower := close[1] > astPrevLower ? math.max(astLowerRaw, astPrevLower) : astLowerRaw
+astUpper := close[1] < astPrevUpper ? math.min(astUpperRaw, astPrevUpper) : astUpperRaw
+
+if astPrevDir == -1
+    astDir := close < astLower ? 1 : -1
+else
+    astDir := close > astUpper ? -1 : 1
+
+astLine      = astDir == -1 ? astLower : astUpper
+astIsUptrend = astDir == -1
+astChanged   = astDir != astDir[1]
+
+astColor = astIsUptrend ? astColLong : astColShort
+
+astPlot    = plot(showSTLines and showAST ? astLine : na, "ASSYIN ST", color=astColor, linewidth=2, force_overlay=true)
+
+plotshape(showBuySignals and showAST and astChanged and astIsUptrend,
+     title="AST BUY", text="BUY",
+     style=shape.labelup, location=location.belowbar,
+     color=color.new(astColLong, 0), textcolor=color.white,
+     size=size.small, force_overlay=true)
+
+// =====================================================
+// 10) ENTRY CONFIRMATION V2
+// =====================================================
+grpEC = "═══ Entry Confirmation V2 ═══"
+
+showEC         = input.bool(true,  "Show Entry Confirmation",       group=grpEC)
+ecRsiPeriod    = input.int(50,     "EC RSI Period",     minval=1,   group=grpEC)
+ecLbR          = input.int(5,      "Pivot Lookback Right",          group=grpEC)
+ecLbL          = input.int(5,      "Pivot Lookback Left",           group=grpEC)
+ecRangeUpper   = input.int(60,     "Max Lookback Range",            group=grpEC)
+ecRangeLower   = input.int(5,      "Min Lookback Range",            group=grpEC)
+ecPlotBull     = input.bool(true,  "Plot Bullish Divergence",       group=grpEC)
+ecPlotBear     = input.bool(true,  "Plot Bearish Divergence",       group=grpEC)
+ecSlowMAPeriod = input.int(50,     "Slow MA Period on RSI",         group=grpEC)
+ecMinMoveRSI   = input.float(4.0,  "EC RSI Min Movement", step=0.5, group=grpEC)
+ecMinMoveSlowMA = input.float(1.5, "EC SlowMA Min Movement", step=0.5, group=grpEC)
+
+ecRsi = ta.rsi(close, ecRsiPeriod)
+ecSlowMA = ta.sma(ecRsi, ecSlowMAPeriod)
+
+ecPlFound = na(ta.pivotlow(ecRsi, ecLbL, ecLbR)) ? false : true
+ecPhFound = na(ta.pivothigh(ecRsi, ecLbL, ecLbR)) ? false : true
+
+ec_inRange(cond) =>
+    ecBars = ta.barssince(cond == true)
+    ecRangeLower <= ecBars and ecBars <= ecRangeUpper
+
+ecOscHL   = ecRsi[ecLbR] > ta.valuewhen(ecPlFound, ecRsi[ecLbR], 1) and ec_inRange(ecPlFound[1])
+ecPriceLL = low[ecLbR] < ta.valuewhen(ecPlFound, low[ecLbR], 1)
+ecBullDiv = ecPlotBull and ecPriceLL and ecOscHL and ecPlFound
+
+ecOscLH   = ecRsi[ecLbR] < ta.valuewhen(ecPhFound, ecRsi[ecLbR], 1) and ec_inRange(ecPhFound[1])
+ecPriceHH = high[ecLbR] > ta.valuewhen(ecPhFound, high[ecLbR], 1)
+ecBearDiv = ecPlotBear and ecPriceHH and ecOscLH and ecPhFound
+
+plotshape(showBuySignals and showEC and ecBullDiv ? ecRsi[ecLbR] : na, offset=-ecLbR,
+     title="EC Bullish Label", text=" EDM ",
+     style=shape.labelup, location=location.absolute,
+     color=color.green, textcolor=color.white)
+
+ecDeltaRsi  = ecRsi - ecRsi[1]
+ecMoveRsi   = math.abs(ecDeltaRsi)
+ecDeltaSlow = ecSlowMA - ecSlowMA[1]
+ecMoveSlow  = math.abs(ecDeltaSlow)
+
+if showEC and ecMoveRsi >= ecMinMoveRSI
+    if ecDeltaRsi > 0
+        label.new(bar_index, ecRsi, "B " + str.tostring(ecMoveRsi, "#.##"),
+             style=label.style_label_up, color=color.purple,
+             textcolor=color.white, size=size.small)
+
+if showEC and ecMoveSlow >= ecMinMoveSlowMA
+    if ecDeltaSlow > 0
+        label.new(bar_index, ecSlowMA, "B " + str.tostring(ecMoveSlow, "#.##"),
+             style=label.style_label_up, color=color.black,
+             textcolor=color.white, size=size.small)
+
+var bool ecBullDivRecent = false
+ecBullDivRecent := ecBullDiv ? true : ecBullDivRecent[1]
+if ta.barssince(ecBullDiv) > 10
+    ecBullDivRecent := false
+
+ecRsiBullish  = ecDeltaRsi > 0 and ecMoveRsi >= ecMinMoveRSI
+ecSlowBullish = ecDeltaSlow > 0 and ecMoveSlow >= ecMinMoveSlowMA
+
+// =====================================================
+// 11) Market Structure Break — CHoCH
+// =====================================================
+grpMSB = "═══ Market Structure Break ═══"
+
+showMSB         = input.bool(true,   "Show CHoCH",                group=grpMSB)
+msb_zigzag_len  = input.int(9,       "ZigZag Length", minval=2,    group=grpMSB)
+msb_fib_factor  = input.float(0.33,  "Fib Factor", 0, 1, 0.01,   group=grpMSB)
+
+var float[] msb_high_points_arr = array.new_float(5)
+var int[]   msb_high_index_arr  = array.new_int(5)
+var float[] msb_low_points_arr  = array.new_float(5)
+var int[]   msb_low_index_arr   = array.new_int(5)
+
+msb_to_up   = high >= ta.highest(msb_zigzag_len)
+msb_to_down = low  <= ta.lowest(msb_zigzag_len)
+
+var int msb_trend      = 1
+var int msb_trend_prev = 1
+msb_trend_prev := nz(msb_trend[1], 1)
+msb_trend := msb_trend == 1 and msb_to_down ? -1 : msb_trend == -1 and msb_to_up ? 1 : msb_trend
+
+msb_last_trend_up_since = ta.barssince(msb_to_up[1])
+msb_low_val   = ta.lowest(nz(msb_last_trend_up_since > 0 ? msb_last_trend_up_since : 1, 1))
+msb_low_index = bar_index - ta.barssince(msb_low_val == low)
+
+msb_last_trend_down_since = ta.barssince(msb_to_down[1])
+msb_high_val   = ta.highest(nz(msb_last_trend_down_since > 0 ? msb_last_trend_down_since : 1, 1))
+msb_high_index = bar_index - ta.barssince(msb_high_val == high)
+
+if msb_trend != msb_trend_prev
+    if msb_trend == 1
+        array.push(msb_low_points_arr, msb_low_val)
+        array.push(msb_low_index_arr, msb_low_index)
+    if msb_trend == -1
+        array.push(msb_high_points_arr, msb_high_val)
+        array.push(msb_high_index_arr, msb_high_index)
+
+f_msb_get_high(ind) =>
+    [array.get(msb_high_points_arr, array.size(msb_high_points_arr) - 1 - ind), array.get(msb_high_index_arr, array.size(msb_high_index_arr) - 1 - ind)]
+
+f_msb_get_low(ind) =>
+    [array.get(msb_low_points_arr, array.size(msb_low_points_arr) - 1 - ind), array.get(msb_low_index_arr, array.size(msb_low_index_arr) - 1 - ind)]
+
+[msb_h0, msb_h0i] = f_msb_get_high(0)
+[msb_h1, msb_h1i] = f_msb_get_high(1)
+[msb_l0, msb_l0i] = f_msb_get_low(0)
+[msb_l1, msb_l1i] = f_msb_get_low(1)
+
+var int   msb_market      = 1
+var int   msb_market_prev = 1
+var float msb_saved_l0    = na
+var float msb_saved_h0    = na
+
+msb_market_prev := nz(msb_market[1], 1)
+
+bool msb_same = (not na(msb_saved_l0) and msb_saved_l0 == msb_l0) or (not na(msb_saved_h0) and msb_saved_h0 == msb_h0)
+
+if not msb_same
+    if msb_market == 1 and msb_l0 < msb_l1 and msb_l0 < msb_l1 - math.abs(msb_h0 - msb_l1) * msb_fib_factor
+        msb_market := -1
+        msb_saved_l0 := msb_l0
+        msb_saved_h0 := msb_h0
+    else if msb_market == -1 and msb_h0 > msb_h1 and msb_h0 > msb_h1 + math.abs(msb_h1 - msb_l0) * msb_fib_factor
+        msb_market := 1
+        msb_saved_l0 := msb_l0
+        msb_saved_h0 := msb_h0
+
+msbBullish = msb_market == 1  and msb_market_prev != 1
+msbBearish = msb_market == -1 and msb_market_prev != -1
+
+var bool msbIsBullishState = false
+if msbBullish
+    msbIsBullishState := true
+if msbBearish
+    msbIsBullishState := false
+
+if showMSB and msbBullish
+    line.new(msb_h1i, msb_h1, msb_h0i, msb_h1, color=color.green, width=2, force_overlay=true)
+    label.new(int(math.avg(msb_h1i, msb_l0i)), msb_h1, "CHoCH",
+         color=color.new(color.black, 100), style=label.style_label_down,
+         textcolor=color.green, size=size.normal, force_overlay=true)
+
+if showMSB and msbBearish
+    line.new(msb_l1i, msb_l1, msb_l0i, msb_l1, color=color.red, width=2, force_overlay=true)
+    label.new(int(math.avg(msb_l1i, msb_h0i)), msb_l1, "CHoCH",
+         color=color.new(color.black, 100), style=label.style_label_up,
+         textcolor=color.red, size=size.normal, force_overlay=true)
+
+msbStructureBull = msb_h0 > msb_h1 + math.abs(msb_h1 - msb_l0) * msb_fib_factor
+msbRealtimeBreak = close > msb_h1 and msb_h1 > 0
+msbChochBullish  = msbIsBullishState or msbStructureBull or msbRealtimeBreak
+
+msbPivotH = ta.pivothigh(high, 10, 5)
+var float msbLastSwingHigh = na
+var float msbPrevSwingHigh = na
+if not na(msbPivotH)
+    msbPrevSwingHigh := msbLastSwingHigh
+    msbLastSwingHigh := msbPivotH
+
+msbSwingCross = not na(msbLastSwingHigh) and close > msbLastSwingHigh and close[1] <= msbLastSwingHigh
+var int msbLastBreakBar = -9999
+if msbSwingCross
+    msbLastBreakBar := bar_index
+
+msbSwingBreak = (bar_index - msbLastBreakBar) <= 6
+
+// =====================================================
+// 12) SIGNAL COMBINÉ — MEGA BUY (v7 — Score /10 — 3 Required)
+// =====================================================
+grpCombo = "═══ Combined BUY Signal ═══"
+showComboBuy   = input.bool(true, "Show Combined BUY Signal",                group=grpCombo)
+comboWindow    = input.int(3,     "Signal lookback window (bars)", minval=1, maxval=10, group=grpCombo)
+comboThreshold = input.int(70,    "Min conditions met (%)",        minval=20, maxval=100, step=5, group=grpCombo)
+comboMaxMove   = input.float(15.0, "Ignore BUY if candle move > (%)", minval=1, maxval=100, step=1, group=grpCombo)
+
+// Condition OBLIGATOIRE 1 : RSI BUY dans fenêtre
+comboRsiBuyFound = false
+for i = 0 to comboWindow * 2
+    comboRsiDelta_i = rsi[i] - rsi[i + 1]
+    if comboRsiDelta_i >= minRSIMoveBuy
+        comboRsiBuyFound := true
+comboCond_rsiRequired = comboRsiBuyFound
+
+// Condition OBLIGATOIRE 2 : DMI+ BUY dans fenêtre
+comboDmiBuyFound = false
+for i = 0 to comboWindow * 2
+    comboDmiDelta_i = dmiPlus[i] - dmiPlus[i + 1]
+    if comboDmiDelta_i > 0 and math.abs(comboDmiDelta_i) >= dmiMinMovePlus
+        comboDmiBuyFound := true
+comboCond_dmiRequired = comboDmiBuyFound
+
+// Condition OBLIGATOIRE 3 : ASSYIN ST Break bullish
+comboAstBreakFound = false
+for i = 0 to comboWindow * 2
+    if astDir[i] == -1 and astDir[i + 1] != -1
+        comboAstBreakFound := true
+comboCond_astRequired = comboAstBreakFound
+
+// Condition OBLIGATOIRE 4 : CHoCH
+comboCond_chochRequired = msbSwingBreak
+
+// Cond 1 : Green Zone
+comboCond1_greenZone = avRegime != -1
+
+// Cond 2 : LazyBar signal dans fenêtre
+comboLazyFound = false
+for i = 0 to comboWindow * 2
+    if math.abs(ht[i]) >= 9.6 or math.abs(ht[i] - ht[i + 1]) >= lbSpikeThresh6
+        comboLazyFound := true
+comboCond2_lazybar = comboLazyFound
+
+// Cond 3 : Volume Range Move %
+comboCond3_volMove = avVolMove >= avMinMove and avVolChange > 0
+
+// Cond 4 : SuperTrend Break bullish
+comboSTBreakFound = false
+for i = 0 to comboWindow * 2
+    if direction[i] < 0 and direction[i + 1] > 0
+        comboSTBreakFound := true
+comboCond4_stBreak = comboSTBreakFound
+
+// Cond 5 : PP SuperTrend Buy
+comboPPBuyFound = false
+for i = 0 to comboWindow * 2
+    if Trend[i] == 1 and Trend[i + 1] == -1
+        comboPPBuyFound := true
+comboCond5_ppBuy = comboPPBuyFound
+
+// Cond 6 : Entry Confirmation Bullish
+comboECFound = false
+for i = 0 to comboWindow * 2
+    ecD_i = nz(ecRsi[i]) - nz(ecRsi[i + 1])
+    ecS_i = nz(ecSlowMA[i]) - nz(ecSlowMA[i + 1])
+    if (ecD_i > 0 and math.abs(ecD_i) >= ecMinMoveRSI) or (ecS_i > 0 and math.abs(ecS_i) >= ecMinMoveSlowMA)
+        comboECFound := true
+comboCond6_ec = comboECFound or ecBullDivRecent
+
+// Score : 3 obligatoires + 7 optionnelles = /10
+comboScore = 0
+comboScore += comboCond_rsiRequired    ? 1 : 0
+comboScore += comboCond_dmiRequired    ? 1 : 0
+comboScore += comboCond_astRequired    ? 1 : 0
+comboScore += comboCond_chochRequired  ? 1 : 0
+comboScore += comboCond1_greenZone     ? 1 : 0
+comboScore += comboCond2_lazybar       ? 1 : 0
+comboScore += comboCond3_volMove       ? 1 : 0
+comboScore += comboCond4_stBreak       ? 1 : 0
+comboScore += comboCond5_ppBuy         ? 1 : 0
+comboScore += comboCond6_ec            ? 1 : 0
+
+comboMinScore = math.ceil(10 * comboThreshold / 100)
+
+comboCandleMove = math.max(math.abs(close - open), high - low) / math.min(open, low) * 100
+megaBuyRaw = showComboBuy and comboCond_rsiRequired and comboCond_dmiRequired and comboCond_astRequired and comboScore >= comboMinScore and comboCandleMove <= comboMaxMove
+
+// Cooldown
+var int megaBuyLastBar = -999
+megaBuy = megaBuyRaw and (bar_index - megaBuyLastBar > comboWindow * 2)
+if megaBuy
+    megaBuyLastBar := bar_index
+
+// Label ★ BUY ★ + Score combiné
+comboAtrOffset = ta.atr(14) * 3
+if megaBuy
+    comboDetail = "★ BUY ★\n"
+    comboDetail += str.tostring(comboScore) + "/10\n"
+    comboDetail += "RSI✓ "
+    comboDetail += comboCond_dmiRequired   ? "DMI✓ " : "DMI✗ "
+    comboDetail += comboCond_astRequired   ? "AST✓" : "AST✗"
+    comboDetail += "\n"
+    comboDetail += comboCond1_greenZone ? "✓" : "✗"
+    comboDetail += "Zone "
+    comboDetail += comboCond2_lazybar   ? "✓" : "✗"
+    comboDetail += "Lazy\n"
+    comboDetail += comboCond3_volMove   ? "✓" : "✗"
+    comboDetail += "Vol "
+    comboDetail += comboCond4_stBreak   ? "✓" : "✗"
+    comboDetail += "ST "
+    comboDetail += comboCond5_ppBuy     ? "✓" : "✗"
+    comboDetail += "PP\n"
+    comboDetail += comboCond6_ec        ? "✓" : "✗"
+    comboDetail += "EC "
+    comboDetail += comboCond_chochRequired ? "✓" : "✗"
+    comboDetail += "CHoCH"
+
+    label.new(bar_index, high,
+         comboDetail,
+         style=label.style_label_down,
+         color=comboScore >= 9 ? color.lime : comboScore >= 7 ? color.new(color.yellow, 40) : color.orange,
+         textcolor=color.black,
+         size=size.small,
+         force_overlay=true)
+
+// =====================================================
+// 13) 🎯 GOLDEN BOX ENTRY — Multi-TF Detection
+//     Utilise directement megaBuy + comboScore
+// =====================================================
+
+grpGB = "═══ 🎯 Golden Box Entry ═══"
+gb_enabled  = input.bool(true, "Enable Golden Box", group=grpGB)
+gb_expiry   = input.int(15, "Expiry (4H bars)", minval=5, maxval=50, group=grpGB)
+gb_tpMult   = input.float(1.5, "TP × box height", step=0.1, group=grpGB)
+gb_slAtr    = input.float(0.5, "SL × ATR buffer", step=0.1, group=grpGB)
+gb_showPanel = input.bool(true, "Show Panel", group=grpGB)
+gb_showTP   = input.bool(true, "Show TP/SL lines", group=grpGB)
+gb_showLabels = input.bool(true, "Show Labels", group=grpGB)
+gb_maxBoxes = input.int(5, "Max Boxes", minval=1, maxval=10, group=grpGB)
+gb_panelPos = input.string("Top Right", "Panel Position",
+     options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grpGB)
+
+grpGBich = "═══ 🔶 GB Ichimoku Cloud ═══"
+gb_tkMin = input.int(9, "Tenkan Min", group=grpGBich)
+gb_tkMax = input.int(30, "Tenkan Max", group=grpGBich)
+gb_kjMin = input.int(20, "Kijun Min", group=grpGBich)
+gb_kjMax = input.int(60, "Kijun Max", group=grpGBich)
+gb_skMin = input.int(50, "Senkou Min", group=grpGBich)
+gb_skMax = input.int(120, "Senkou Max", group=grpGBich)
+gb_dynPct = input.float(96.85, "Adaptive %", group=grpGBich) / 100.0
+gb_skOff = input.int(26, "Offset", group=grpGBich)
+gb_chFilt = input.int(25, "Chikou Filter", group=grpGBich)
+gb_volPeak = input.int(50, "OBV Peak", group=grpGBich)
+gb_atrF = input.int(14, "ATR Fast", group=grpGBich)
+gb_atrS = input.int(46, "ATR Slow", group=grpGBich)
+gb_volMult = input.float(1.5, "Vol Break ×", step=0.1, group=grpGBich)
+gb_volLen = input.int(20, "Vol SMA Len", group=grpGBich)
+
+// ── Multi-TF Signal Detection ──
+// megaBuy est déjà calculé. On check aussi 30M et 1H via request.security
+[gb_since_30m, gb_score_30m, gb_rsi_30m, gb_time_30m, gb_close_30m] = request.security(
+     syminfo.tickerid, "30",
+     [ta.barssince(megaBuy), comboScore, rsi, time, close],
+     lookahead=barmerge.lookahead_off)
+
+[gb_since_1h, gb_score_1h, gb_rsi_1h, gb_time_1h, gb_close_1h] = request.security(
+     syminfo.tickerid, "60",
+     [ta.barssince(megaBuy), comboScore, rsi, time, close],
+     lookahead=barmerge.lookahead_off)
+
+gb_new_current = megaBuy
+gb_new_30m = not na(gb_since_30m) and gb_since_30m == 0
+gb_new_1h  = not na(gb_since_1h)  and gb_since_1h  == 0
+
+gb_anyNew = gb_new_current or gb_new_30m or gb_new_1h
+
+var string gb_bestTF = ""
+var int    gb_bestScore = 0
+var float  gb_bestRsi = 0.0
+var float  gb_bestClose = 0.0
+var int    gb_bestTime = 0
+
+if gb_anyNew
+    gb_bestScore := 0
+    if gb_new_current
+        gb_bestTF := timeframe.period
+        gb_bestScore := comboScore
+        gb_bestRsi := rsi
+        gb_bestClose := close
+        gb_bestTime := time
+    if gb_new_30m and gb_score_30m > gb_bestScore
+        gb_bestTF := "30"
+        gb_bestScore := gb_score_30m
+        gb_bestRsi := gb_rsi_30m
+        gb_bestClose := gb_close_30m
+        gb_bestTime := gb_time_30m
+    if gb_new_1h and gb_score_1h > gb_bestScore
+        gb_bestTF := "60"
+        gb_bestScore := gb_score_1h
+        gb_bestRsi := gb_rsi_1h
+        gb_bestClose := gb_close_1h
+        gb_bestTime := gb_time_1h
+
+// Anti-doublon par bougie 4H
+var int gb_last4h = 0
+gb_cur4h = int(time / (4 * 60 * 60 * 1000))
+gb_signal = gb_enabled and gb_anyNew and gb_cur4h != gb_last4h
+if gb_signal
+    gb_last4h := gb_cur4h
+
+// ── 4H Candle Data ──
+[gb_h4_hi, gb_h4_lo, gb_h4_cl, gb_h4_rsi, gb_h4_atr] = request.security(
+     syminfo.tickerid, "240",
+     [high, low, close, ta.rsi(close, rsiLength), ta.atr(14)],
+     lookahead=barmerge.lookahead_off)
+
+// DMI 4H
+gb_f_dmi4h() =>
+    _u = ta.change(high)
+    _d = -ta.change(low)
+    _p = _u > _d and _u > 0 ? _u : 0.0
+    _m = _d > _u and _d > 0 ? _d : 0.0
+    _t = ta.rma(ta.tr, dmiLen)
+    [fixnan(100 * ta.rma(_p, dmiLen) / _t), fixnan(100 * ta.rma(_m, dmiLen) / _t)]
+
+[gb_h4_dip, gb_h4_dim] = request.security(syminfo.tickerid, "240", gb_f_dmi4h(), lookahead=barmerge.lookahead_off)
+
+// ── Assyin Cloud (1H + 30M) ──
+gb_f_cloud() =>
+    _alt = ta.swma(close > open ? high : low)
+    _haC = ohlc4
+    _hChg = ta.change(_haC)
+    _obv = ta.cum((_hChg > 0 ? 1.0 : _hChg < 0 ? -1.0 : 0.0) * volume)
+    _aF = ta.atr(gb_atrF)
+    _aS = ta.atr(gb_atrS)
+    _cH = ta.highest(high, gb_chFilt)[gb_chFilt]
+    _cL = ta.lowest(low, gb_chFilt)[gb_chFilt]
+    _cSig = _alt > _cH ? 1 : _alt < _cL ? -1 : 0
+    _bull = _obv > gb_volPeak and _aF > _aS and _cSig == 1
+
+    var float _dTk = math.avg(gb_tkMin, gb_tkMax)
+    _dTk := _bull ? math.max(gb_tkMin, _dTk * gb_dynPct) : math.min(gb_tkMax, _dTk * (2.0 - gb_dynPct))
+    var float _dKj = math.avg(gb_kjMin, gb_kjMax)
+    _dKj := _bull ? math.max(gb_kjMin, _dKj * gb_dynPct) : math.min(gb_kjMax, _dKj * (2.0 - gb_dynPct))
+    var float _dSk = math.avg(gb_skMin, gb_skMax)
+    _dSk := _bull ? math.max(gb_skMin, _dSk * gb_dynPct) : math.min(gb_skMax, _dSk * (2.0 - gb_dynPct))
+
+    _tkI = math.max(int(_dTk), 2)
+    _kjI = math.max(int(_dKj), 2)
+    _skI = math.max(int(_dSk), 2)
+
+    _tk = math.avg(ta.highest(high, _tkI), ta.lowest(low, _tkI))
+    _kj = math.avg(ta.highest(high, _kjI), ta.lowest(low, _kjI))
+    _sA = math.avg(_tk, _kj)
+    _sAd = _sA[gb_skOff - 1]
+    _sB = math.avg(ta.highest(high, _skI), ta.lowest(low, _skI))
+    _sBd = _sB[gb_skOff - 1]
+    _cTop = math.max(nz(_sAd), nz(_sBd))
+    [_cTop, close, _skI, _tkI, _kjI]
+
+[gb_ct_1h, gb_cl_1h, gb_dSk, gb_dTk, gb_dKj] = request.security(
+     syminfo.tickerid, "60", gb_f_cloud(), lookahead=barmerge.lookahead_off)
+[gb_ct_30m, gb_cl_30m, _, _, _] = request.security(
+     syminfo.tickerid, "30", gb_f_cloud(), lookahead=barmerge.lookahead_off)
+
+gb_aboveCloud_1h  = not na(gb_ct_1h)  and gb_cl_1h  > gb_ct_1h
+gb_aboveCloud_30m = not na(gb_ct_30m) and gb_cl_30m > gb_ct_30m
+
+// Volume
+gb_volRatio = volume / ta.sma(volume, gb_volLen)
+gb_atrLocal = ta.atr(14)
+
+// ── Box Storage ──
+var float[]  gba_h   = array.new_float(0)
+var float[]  gba_l   = array.new_float(0)
+var float[]  gba_rsi = array.new_float(0)
+var int[]    gba_bar = array.new_int(0)
+var int[]    gba_sta = array.new_int(0)
+var box[]    gba_bx  = array.new_box(0)
+var line[]   gba_tp  = array.new_line(0)
+var line[]   gba_sl  = array.new_line(0)
+var float[]  gba_px  = array.new_float(0)
+var int[]    gba_tm  = array.new_int(0)
+var int[]    gba_sc  = array.new_int(0)
+var string[] gba_tf  = array.new_string(0)
+
+gb_tfMin = timeframe.in_seconds() / 60
+gb_bpE = int(gb_expiry * 240 / math.max(gb_tfMin, 1))
+
+// ── Create Box ──
+if gb_signal and array.size(gba_h) < gb_maxBoxes
+    gb_bH = nz(gb_h4_hi, high)
+    gb_bL = nz(gb_h4_lo, low)
+    gb_bR = gb_bH - gb_bL
+    gb_sAtr = nz(gb_h4_atr, gb_atrLocal)
+    gb_tfLabel = gb_bestTF == "30" ? "30M" : gb_bestTF == "60" ? "1H" : gb_bestTF == "240" ? "4H" : timeframe.period
+
+    gb_newBox = box.new(bar_index, gb_bH, bar_index + gb_bpE, gb_bL,
+         border_color=color.new(#FFD700, 40), border_width=2,
+         bgcolor=color.new(#FFD700, 85),
+         text="📦 " + str.tostring(gb_bestScore) + "/10 [" + gb_tfLabel + "]",
+         text_color=color.new(#FFD700, 0), text_size=size.small,
+         text_halign=text.align_left, text_valign=text.align_bottom,
+         force_overlay=true)
+
+    array.push(gba_h, gb_bH)
+    array.push(gba_l, gb_bL)
+    array.push(gba_rsi, gb_bestRsi)
+    array.push(gba_bar, bar_index)
+    array.push(gba_sta, 0)
+    array.push(gba_bx, gb_newBox)
+    array.push(gba_px, gb_bestClose)
+    array.push(gba_tm, gb_bestTime)
+    array.push(gba_sc, gb_bestScore)
+    array.push(gba_tf, gb_tfLabel)
+
+    gb_tpP = gb_bH + gb_bR * gb_tpMult
+    gb_slP = gb_bL - gb_sAtr * gb_slAtr
+    array.push(gba_tp, line.new(bar_index, gb_tpP, bar_index + gb_bpE, gb_tpP,
+         color=color.new(#00E676, 50), width=2, style=line.style_dashed, force_overlay=true))
+    array.push(gba_sl, line.new(bar_index, gb_slP, bar_index + gb_bpE, gb_slP,
+         color=color.new(#FF1744, 50), width=2, style=line.style_dashed, force_overlay=true))
+
+    if gb_showLabels
+        label.new(bar_index, gb_bL - gb_sAtr * 0.6,
+             "📦 GOLDEN BOX (4H)\n★ " + str.tostring(gb_bestScore) + "/10 [" + gb_tfLabel + "]" +
+             "\nH:" + str.tostring(gb_bH, format.mintick) + " L:" + str.tostring(gb_bL, format.mintick) +
+             "\nRSI:" + str.tostring(gb_bestRsi, "#.#") +
+             " ⏰ " + str.format_time(gb_bestTime, "dd/MM HH:mm", syminfo.timezone) +
+             "\n💰 " + str.tostring(gb_bestClose, format.mintick),
+             style=label.style_label_up, color=color.new(#FFD700, 10),
+             textcolor=color.white, size=size.small, force_overlay=true)
+
+// ── Conditions Checker ──
+var bool  gbP_dmi = false
+var bool  gbP_brk = false
+var bool  gbP_rsi = false
+var bool  gbP_cl1 = false
+var bool  gbP_cl3 = false
+var bool  gbP_vol = false
+var bool  gbP_ret = false
+var bool  gbP_ent = false
+var int   gbP_cnt = 0
+var float gbP_h = na
+var float gbP_l = na
+var float gbP_px = na
+var int   gbP_tm = na
+var int   gbP_sc = 0
+var string gbP_tf = ""
+var bool  gbP_active = false
+
+gbP_active := false
+
+if array.size(gba_h) > 0
+    gb_latAct = -1
+    for i = array.size(gba_h) - 1 to 0
+        if array.get(gba_sta, i) == 0
+            gb_latAct := i
+            break
+
+    for i = array.size(gba_h) - 1 to 0
+        if array.get(gba_sta, i) != 0
+            continue
+
+        gb_gH = array.get(gba_h, i)
+        gb_gL = array.get(gba_l, i)
+        gb_gR = array.get(gba_rsi, i)
+        gb_gS = array.get(gba_bar, i)
+        gb_gB = array.get(gba_bx, i)
+        gb_bE = bar_index - gb_gS
+
+        if gb_bE > gb_bpE
+            array.set(gba_sta, i, -1)
+            box.set_border_color(gb_gB, color.new(#FF4444, 60))
+            box.set_bgcolor(gb_gB, color.new(#FF4444, 85))
+            box.set_text(gb_gB, "⏰ EXP")
+            continue
+
+        box.set_right(gb_gB, bar_index + 5)
+        if array.size(gba_tp) > i
+            line.set_x2(array.get(gba_tp, i), bar_index + 5)
+        if array.size(gba_sl) > i
+            line.set_x2(array.get(gba_sl, i), bar_index + 5)
+
+        gb_cD = nz(gb_h4_dip) > nz(gb_h4_dim)
+        gb_cB = nz(gb_h4_cl) > gb_gH
+        gb_cR = gb_cB and nz(gb_h4_rsi) > gb_gR
+        gb_c1 = gb_aboveCloud_1h
+        gb_c3 = gb_aboveCloud_30m
+        gb_cV = gb_volRatio >= gb_volMult
+        gb_cRt = low <= gb_gH * 1.005 and low >= gb_gH * 0.985 and close > gb_gH
+
+        gb_mC = (gb_cD ? 1 : 0) + (gb_cB ? 1 : 0) + (gb_cR ? 1 : 0) + (gb_c1 ? 1 : 0) + (gb_c3 ? 1 : 0)
+        gb_eOK = gb_cD and gb_cB and gb_cR and gb_c1 and gb_c3
+
+        if i == gb_latAct
+            gbP_dmi := gb_cD
+            gbP_brk := gb_cB
+            gbP_rsi := gb_cR
+            gbP_cl1 := gb_c1
+            gbP_cl3 := gb_c3
+            gbP_vol := gb_cV
+            gbP_ret := gb_cRt
+            gbP_ent := gb_eOK
+            gbP_cnt := gb_mC
+            gbP_h := gb_gH
+            gbP_l := gb_gL
+            gbP_px := array.size(gba_px) > i ? array.get(gba_px, i) : na
+            gbP_tm := array.size(gba_tm) > i ? array.get(gba_tm, i) : na
+            gbP_sc := array.size(gba_sc) > i ? array.get(gba_sc, i) : 0
+            gbP_tf := array.size(gba_tf) > i ? array.get(gba_tf, i) : ""
+            gbP_active := true
+
+        if gb_eOK and array.get(gba_sta, i) == 0
+            array.set(gba_sta, i, 1)
+            box.set_border_color(gb_gB, color.new(#00FF88, 30))
+            box.set_bgcolor(gb_gB, color.new(#00FF88, 80))
+            box.set_border_width(gb_gB, 3)
+            box.set_text(gb_gB, "🎯 ENTRY")
+
+            if gb_showLabels
+                gb_eP = close
+                gb_tP = gb_eP + (gb_gH - gb_gL) * gb_tpMult
+                gb_sP = gb_gL - gb_atrLocal * gb_slAtr
+                gb_rr = math.abs(gb_tP - gb_eP) / math.max(math.abs(gb_eP - gb_sP), syminfo.mintick)
+                label.new(bar_index, high + gb_atrLocal * 1.2,
+                     "🎯 ENTRY READY\n💰 " + str.tostring(gb_eP, format.mintick) +
+                     "\n🎯 TP:" + str.tostring(gb_tP, format.mintick) +
+                     "\n🛑 SL:" + str.tostring(gb_sP, format.mintick) +
+                     "\n📊 R:R 1:" + str.tostring(gb_rr, "#.#"),
+                     style=label.style_label_down, color=color.new(#00E676, 0),
+                     textcolor=color.white, size=size.normal, force_overlay=true)
+
+            if gb_showTP and array.size(gba_tp) > i
+                line.set_color(array.get(gba_tp, i), color.new(#00E676, 0))
+                line.set_color(array.get(gba_sl, i), color.new(#FF1744, 0))
+                line.set_width(array.get(gba_tp, i), 3)
+                line.set_width(array.get(gba_sl, i), 3)
+
+if not gbP_active and array.size(gba_h) > 0
+    gb_lI = array.size(gba_h) - 1
+    gbP_h := array.get(gba_h, gb_lI)
+    gbP_l := array.get(gba_l, gb_lI)
+    gbP_px := array.size(gba_px) > gb_lI ? array.get(gba_px, gb_lI) : na
+    gbP_tm := array.size(gba_tm) > gb_lI ? array.get(gba_tm, gb_lI) : na
+    gbP_sc := array.size(gba_sc) > gb_lI ? array.get(gba_sc, gb_lI) : 0
+    gbP_tf := array.size(gba_tf) > gb_lI ? array.get(gba_tf, gb_lI) : ""
+    gbP_ent := array.get(gba_sta, gb_lI) == 1
+
+// ── Panel ──
+gb_fic(bool c) => c ? "✅" : "❌"
+gb_fib(bool c) => c ? "🟢" : "⚪"
+
+gb_pp = gb_panelPos == "Top Right" ? position.top_right :
+     gb_panelPos == "Bottom Right" ? position.bottom_right :
+     gb_panelPos == "Top Left" ? position.top_left : position.bottom_left
+
+var table gb_tbl = table.new(gb_pp, 3, 17,
+     bgcolor=color.new(#1a1a2e, 5), border_width=1,
+     border_color=color.new(#333355, 0), frame_width=2,
+     frame_color=color.new(#FFD700, 20), force_overlay=true)
+
+if gb_enabled and gb_showPanel and barstate.islast
+    gb_sC = gbP_ent ? color.new(#00E676, 0) : gbP_cnt >= 3 ? color.new(#FF9800, 0) : color.new(#FF5252, 0)
+    gb_sT = gbP_ent ? "🎯 ENTRY READY" : gbP_active ? "📦 WATCHING (" + str.tostring(gbP_cnt) + "/5)" : "⏸️ NO ACTIVE BOX"
+
+    table.cell(gb_tbl, 0, 0, "🎯 GOLDEN BOX ENTRY",
+         text_color=color.new(#FFD700, 0), text_size=size.normal,
+         bgcolor=color.new(#0d0d1a, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 0, 2, 0)
+    table.cell(gb_tbl, 0, 1, gb_sT, text_color=gb_sC,
+         text_size=size.small, bgcolor=color.new(#0d0d1a, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 1, 2, 1)
+
+    table.cell(gb_tbl, 0, 2, "━━ 📡 MEGA BUY ━━",
+         text_color=color.new(#FFD700, 0), text_size=size.tiny,
+         bgcolor=color.new(#111122, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 2, 2, 2)
+
+    gb_tsS = not na(gbP_tm) ? str.format_time(gbP_tm, "dd/MM HH:mm", syminfo.timezone) : "—"
+    gb_pxS = not na(gbP_px) ? str.tostring(gbP_px, format.mintick) : "—"
+    gb_gbS = not na(gbP_h) ? str.tostring(gbP_h, format.mintick) + " / " + str.tostring(gbP_l, format.mintick) : "—"
+    gb_tfC = gbP_tf == "4H" or gbP_tf == "240" ? color.new(#FF9800, 0) : gbP_tf == "1H" or gbP_tf == "60" ? color.new(#2196F3, 0) : color.new(#9C27B0, 0)
+
+    table.cell(gb_tbl, 0, 3, "🔔", text_size=size.tiny, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 3, gb_tsS, text_color=color.new(#FFFFFF, 0), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 3, str.tostring(gbP_sc) + "/10 " + gbP_tf, text_color=gb_tfC, text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 4, "💰", text_size=size.tiny, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 4, gb_pxS, text_color=color.new(#FFD700, 0), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 4, "Prix", text_color=color.new(#888888, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 5, "📦", text_size=size.tiny, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 5, gb_gbS, text_color=color.new(#FF9800, 0), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 5, "Box H/L", text_color=color.new(#888888, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 6, "━━ OBLIGATOIRE ━━", text_color=color.new(#888888, 0), text_size=size.tiny, bgcolor=color.new(#111122, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 6, 2, 6)
+
+    table.cell(gb_tbl, 0, 7, gb_fic(gbP_dmi), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 7, "DMI+ > DMI-", text_color=gbP_dmi ? color.new(#00E676, 0) : color.new(#FF5252, 0), text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 7, "4H", text_color=color.new(#888888, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 8, gb_fic(gbP_brk), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 8, "Break Box High", text_color=gbP_brk ? color.new(#00E676, 0) : color.new(#FF5252, 0), text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 8, "4H", text_color=color.new(#888888, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 9, gb_fic(gbP_rsi), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 9, "RSI Higher High", text_color=gbP_rsi ? color.new(#00E676, 0) : color.new(#FF5252, 0), text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 9, "4H", text_color=color.new(#888888, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 10, gb_fic(gbP_cl1), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 10, "Prix > Cloud", text_color=gbP_cl1 ? color.new(#00E676, 0) : color.new(#FF5252, 0), text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 10, "1H", text_color=color.new(#2196F3, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 11, gb_fic(gbP_cl3), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 11, "Prix > Cloud", text_color=gbP_cl3 ? color.new(#00E676, 0) : color.new(#FF5252, 0), text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 11, "30M", text_color=color.new(#9C27B0, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 12, "━━━ BONUS ━━━", text_color=color.new(#888888, 0), text_size=size.tiny, bgcolor=color.new(#111122, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 12, 2, 12)
+
+    table.cell(gb_tbl, 0, 13, gb_fib(gbP_vol), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 13, "Vol " + str.tostring(gb_volRatio, "#.#") + "× avg", text_color=gbP_vol ? color.new(#00E676, 0) : color.new(#888888, 0), text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 13, "MTF", text_color=color.new(#888888, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 14, gb_fib(gbP_ret), text_size=size.small, text_halign=text.align_center)
+    table.cell(gb_tbl, 1, 14, "Retest Support", text_color=gbP_ret ? color.new(#00E676, 0) : color.new(#888888, 0), text_size=size.small, text_halign=text.align_left)
+    table.cell(gb_tbl, 2, 14, "1H", text_color=color.new(#888888, 0), text_size=size.tiny)
+
+    table.cell(gb_tbl, 0, 15, "━━ VALEURS ━━", text_color=color.new(#888888, 0), text_size=size.tiny, bgcolor=color.new(#111122, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 15, 2, 15)
+
+    gb_inf = "RSI:" + str.tostring(rsi, "#.#") + " | DI+:" + str.tostring(dmiPlus, "#.#") + " DI-:" + str.tostring(dmiMinus, "#.#") +
+         "\nSB:" + str.tostring(gb_dSk) + " TK:" + str.tostring(gb_dTk) + " KJ:" + str.tostring(gb_dKj) + " | Vol:" + str.tostring(gb_volRatio, "#.#") + "×"
+    table.cell(gb_tbl, 0, 16, gb_inf, text_color=color.new(#CCCCCC, 0),
+         text_size=size.tiny, bgcolor=color.new(#111122, 0), text_halign=text.align_center)
+    table.merge_cells(gb_tbl, 0, 16, 2, 16)
+
+// ── GB Diamond on chart ──
+plotshape(gb_signal and gb_showLabels, "GB Signal", shape.diamond, location.belowbar, color.new(#FFD700, 0), size=size.small, force_overlay=true)
+
+// =====================================================
+// Alertes globales
+// =====================================================
+alertcondition(direction[1] > direction,  title="ST Downtrend to Uptrend",  message="Supertrend: Downtrend -> Uptrend")
+alertcondition(direction[1] < direction,  title="ST Uptrend to Downtrend",  message="Supertrend: Uptrend -> Downtrend")
+alertcondition(direction[1] != direction, title="ST Trend Change",          message="Supertrend: Trend Change")
+
+alertcondition(bsignal,           title="PP Buy Signal",    message="PivotPoint Supertrend: Buy")
+alertcondition(ssignal,           title="PP Sell Signal",   message="PivotPoint Supertrend: Sell")
+alertcondition(Trend != Trend[1], title="PP Trend Changed", message="PivotPoint Supertrend: Trend Changed")
+
+alertcondition(showRSI and not neutralOnly and deltaRSI >= minRSIMoveBuy and showBuy,
+     title="RSI BUY Signal",  message="RSI Movement: BUY Signal")
+alertcondition(showRSI and not neutralOnly and -deltaRSI >= minRSIMoveSell and showSell,
+     title="RSI SELL Signal", message="RSI Movement: SELL Signal")
+
+alertcondition(showLazyBar and math.abs(ht - ht[1]) >= lbSpikeThresh8,
+     title="LB Spike ≥8", message="LazyBar: Spike ≥ 8 detected")
+alertcondition(showLazyBar and math.abs(ht - ht[1]) >= lbSpikeThresh7,
+     title="LB Spike ≥7", message="LazyBar: Spike ≥ 7 detected")
+alertcondition(showLazyBar and math.abs(ht - ht[1]) >= lbSpikeThresh6,
+     title="LB Spike ≥6", message="LazyBar: Spike ≥ 6 detected")
+
+alertcondition(showATRVol and avRegime == 1  and avRegime[1] != 1,
+     title="AV Expansion Regime",   message="ATR+Volume: Expansion regime started")
+alertcondition(showATRVol and avRegime == -1 and avRegime[1] != -1,
+     title="AV Contraction Regime", message="ATR+Volume: Contraction regime started")
+
+alertcondition(smcIsBOSAlert,   title="SMC BOS",   message="SMC: BOS detected")
+alertcondition(smcIsCHOCHAlert, title="SMC CHoCH",  message="SMC: CHoCH detected")
+
+alertcondition(showDMI and not dmiNeutralOnly and dmiDPlus > 0 and dmiMPlus >= dmiMinMovePlus and dmiShowBuy,
+     title="DMI +DI BUY",  message="DMI: +DI BUY signal")
+alertcondition(showDMI and not dmiNeutralOnly and dmiDMinus < 0 and dmiMMinus >= dmiMinMoveMinus and dmiShowBuy,
+     title="DMI -DI BUY",  message="DMI: -DI BUY signal")
+alertcondition(showDMI and not dmiNeutralOnly and dmiDPlus < 0 and dmiMPlus >= dmiMinMovePlus and dmiShowSell,
+     title="DMI +DI SELL", message="DMI: +DI SELL signal")
+alertcondition(showDMI and not dmiNeutralOnly and dmiDMinus > 0 and dmiMMinus >= dmiMinMoveMinus and dmiShowSell,
+     title="DMI -DI SELL", message="DMI: -DI SELL signal")
+
+alertcondition(showAST and astChanged and astIsUptrend,
+     title="AST BUY Signal",    message="ASSYIN Supertrend: BUY - Trend Up")
+alertcondition(showAST and astChanged and not astIsUptrend,
+     title="AST Trend Down",    message="ASSYIN Supertrend: Trend Down")
+
+alertcondition(showEC and ecBullDiv,
+     title="EC Bullish Divergence", message="Entry Confirmation: Bullish Divergence (EDM)")
+alertcondition(showEC and ecBearDiv,
+     title="EC Bearish Divergence", message="Entry Confirmation: Bearish Divergence (EDM)")
+alertcondition(showEC and ecRsiBullish,
+     title="EC RSI50 BUY", message="Entry Confirmation: RSI50 BUY movement")
+alertcondition(showEC and ecSlowBullish,
+     title="EC SlowMA BUY", message="Entry Confirmation: SlowMA BUY momentum")
+
+alertcondition(showMSB and msbBullish,
+     title="CHoCH Bullish", message="Market Structure: Bullish CHoCH")
+alertcondition(showMSB and msbBearish,
+     title="CHoCH Bearish", message="Market Structure: Bearish CHoCH")
+
+alertcondition(megaBuy, title="★ MEGA BUY ★", message="MEGA BUY signal triggered!")
+alertcondition(gb_signal, title="📦 Golden Box Created", message="Golden Box on {{ticker}} at {{close}}")
+alertcondition(gbP_ent and not gbP_ent[1], title="🎯 GB Entry Ready", message="GB Entry Ready on {{ticker}} at {{close}}")

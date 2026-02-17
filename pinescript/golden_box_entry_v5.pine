@@ -1,0 +1,574 @@
+// ═══════════════════════════════════════════════════════════════
+//  🎯 MEGA BUY — Golden Box Entry v5 (Multi-TF Detection)
+//  
+//  v5 FIX : Détecte le MEGA BUY sur 15m/30m/1h/4h
+//  via request.security → la box apparaît sur TOUT TF
+//  
+//  Auteur: ASSYIN-2026
+// ═══════════════════════════════════════════════════════════════
+
+//@version=6
+indicator("🎯 Golden Box Entry v5", "GB-ENTRY-V5", overlay=true,
+     max_boxes_count=50, max_labels_count=200, max_lines_count=100,
+     max_bars_back=2000)
+
+// ═══════════════════════════════════════════════════════
+// ⚙️ INPUTS
+// ═══════════════════════════════════════════════════════
+
+g_mb = "📡 MEGA BUY"
+i_rsiLen   = input.int(14, "RSI Length", group=g_mb)
+i_rsiMove  = input.float(12.0, "RSI Min Move", step=0.5, group=g_mb)
+i_dmiLen   = input.int(14, "DMI Length", group=g_mb)
+i_dmiMove  = input.float(10.0, "DMI+ Min Move", step=0.5, group=g_mb)
+i_astFact  = input.float(3.0, "AST Factor", step=0.1, group=g_mb)
+i_astPer   = input.int(10, "AST ATR Period", group=g_mb)
+i_win      = input.int(3, "Window (bars)", minval=1, maxval=10, group=g_mb)
+i_pct      = input.int(70, "Min %", minval=20, maxval=100, step=5, group=g_mb)
+i_maxMv    = input.float(15.0, "Max candle %", step=1, group=g_mb)
+
+g_box = "📦 GOLDEN BOX"
+i_expiry   = input.int(15, "Expiry (4H bars)", minval=5, maxval=50, group=g_box)
+i_tpM      = input.float(1.5, "TP ×", step=0.1, group=g_box)
+i_slA      = input.float(0.5, "SL × ATR", step=0.1, group=g_box)
+i_bxW      = input.color(color.new(#FFD700, 70), "Watching", group=g_box)
+i_bxR      = input.color(color.new(#00FF88, 60), "Ready", group=g_box)
+i_bxE      = input.color(color.new(#FF4444, 80), "Expired", group=g_box)
+
+g_ich = "🔶 ICHIMOKU"
+i_tkMin = input.int(9, "TK Min", group=g_ich, inline="t")
+i_tkMax = input.int(30, "Max", group=g_ich, inline="t")
+i_kjMin = input.int(20, "KJ Min", group=g_ich, inline="k")
+i_kjMax = input.int(60, "Max", group=g_ich, inline="k")
+i_skMin = input.int(50, "SK Min", group=g_ich, inline="s")
+i_skMax = input.int(120, "Max", group=g_ich, inline="s")
+i_dPct  = input.float(96.85, "%", group=g_ich) / 100.0
+i_skOff = input.int(26, "Offset", group=g_ich)
+i_chF   = input.int(25, "Chikou", group=g_ich)
+i_vPk   = input.int(50, "OBV Peak", group=g_ich)
+i_aF    = input.int(14, "ATR F", group=g_ich, inline="a")
+i_aS = input.int(46, "S", group=g_ich, inline="a")
+i_shCl  = input.bool(true, "Cloud", group=g_ich)
+
+g_vol = "📊 VOLUME"
+i_vMult = input.float(1.5, "Break ×", step=0.1, group=g_vol)
+i_vLen  = input.int(20, "SMA Len", group=g_vol)
+
+g_dsp = "🎨 DISPLAY"
+i_shP   = input.bool(true, "Panel", group=g_dsp)
+i_shTP  = input.bool(true, "TP/SL", group=g_dsp)
+i_shLb  = input.bool(true, "Labels", group=g_dsp)
+i_pPos  = input.string("Top Right", "Pos", options=["Top Right","Bottom Right","Top Left","Bottom Left"], group=g_dsp)
+i_mxBx  = input.int(5, "Max Boxes", minval=1, maxval=15, group=g_dsp)
+
+// ═══════════════════════════════════════════════════════
+// ★ MEGA BUY — FULL v7 DETECTION FUNCTION
+// Packagé dans une fonction pour request.security multi-TF
+// ═══════════════════════════════════════════════════════
+
+f_megabuy() =>
+    // RSI
+    _chg = ta.change(close)
+    _rU  = ta.rma(math.max(_chg, 0), i_rsiLen)
+    _rD  = ta.rma(-math.min(_chg, 0), i_rsiLen)
+    _rsi = _rD == 0 ? 100 : _rU == 0 ? 0 : 100 - (100 / (1 + _rU / _rD))
+
+    // DMI
+    _du  = ta.change(high)
+    _dd  = -ta.change(low)
+    _pdm = _du > _dd and _du > 0 ? _du : 0.0
+    _mdm = _dd > _du and _dd > 0 ? _dd : 0.0
+    _tr  = ta.rma(ta.tr, i_dmiLen)
+    _dip = fixnan(100 * ta.rma(_pdm, i_dmiLen) / _tr)
+    _dim = fixnan(100 * ta.rma(_mdm, i_dmiLen) / _tr)
+
+    // AST Supertrend
+    _atr = ta.atr(i_astPer)
+    _hl2 = (high + low) / 2
+    _uRaw = _hl2 + (i_astFact * _atr)
+    _lRaw = _hl2 - (i_astFact * _atr)
+    var float _astU = na
+    var float _astL = na
+    var int _astD = 1
+    _pU = nz(_astU[1], _uRaw)
+    _pL = nz(_astL[1], _lRaw)
+    _pD = nz(_astD[1], 1)
+    _astL := close[1] > _pL ? math.max(_lRaw, _pL) : _lRaw
+    _astU := close[1] < _pU ? math.min(_uRaw, _pU) : _uRaw
+    _astD := _pD == -1 ? (close < _astL ? 1 : -1) : (close > _astU ? -1 : 1)
+
+    // ST classique
+    [_st, _dir] = ta.supertrend(3.0, 10)
+
+    // PP Supertrend
+    _ph = ta.pivothigh(high, 2, 2)
+    _pl = ta.pivotlow(low, 2, 2)
+    var float _ctr = na
+    var float _lp = na
+    if not na(_ph)
+        _lp := _ph
+    if not na(_pl)
+        _lp := _pl
+    if not na(_lp)
+        _ctr := na(_ctr) ? _lp : (_ctr * 2 + _lp) / 3
+    _ppU = _ctr - (3.0 * ta.atr(10))
+    _ppD = _ctr + (3.0 * ta.atr(10))
+    var float _ppTU = na
+    var float _ppTD = na
+    var int _ppT = 1
+    _ppTU := na(_ppTU[1]) ? _ppU : (close[1] > _ppTU[1] ? math.max(_ppU, _ppTU[1]) : _ppU)
+    _ppTD := na(_ppTD[1]) ? _ppD : (close[1] < _ppTD[1] ? math.min(_ppD, _ppTD[1]) : _ppD)
+    _ppT := close > _ppTD[1] ? 1 : close < _ppTU[1] ? -1 : nz(_ppT[1], 1)
+
+    // LazyBar
+    _lbM = (high + low + high[1] + low[1] + high[2] + low[2] + high[3] + low[3] + high[4] + low[4]) / 10
+    _lbS = ((high-low) + (high[1]-low[1]) + (high[2]-low[2]) + (high[3]-low[3]) + (high[4]-low[4])) / 5 * 0.2
+    _ht = _lbS != 0 ? (close - _lbM) / _lbS : 0.0
+
+    // ATR+Vol Regime
+    _avAtr = ta.ema(ta.rma(ta.tr(true), 14), 10)
+    _avSlp = (_avAtr - _avAtr[1]) / _avAtr[1] * 100
+    var int _avAR = 0
+    _avAR := _avSlp > 1.2 ? 1 : _avSlp < -1.2 ? -1 : _avAR
+    _avVM = ta.sma(volume, 20)
+    _avVR = _avVM != 0 ? volume / _avVM : 0.0
+    _avVC = _avVM != 0 ? (volume - volume[1]) / _avVM * 100 : 0.0
+    var int _avVReg = 0
+    _avVReg := _avVR > 1.5 ? 1 : _avVR < 0.8 ? -1 : _avVReg
+    var int _avReg = 0
+    _avReg := _avAR == 1 and _avVReg == 1 ? 1 : _avAR == -1 and _avVReg == -1 ? -1 : 0
+
+    // EC
+    _ecR = ta.rsi(close, 50)
+    _ecS = ta.sma(_ecR, 50)
+    _ecDR = _ecR - _ecR[1]
+    _ecDS = _ecS - _ecS[1]
+    _ecPl = not na(ta.pivotlow(_ecR, 5, 5))
+    _ecHL = _ecR[5] > ta.valuewhen(_ecPl, _ecR[5], 1)
+    _ecLL = low[5] < ta.valuewhen(_ecPl, low[5], 1)
+    _ecBD = _ecLL and _ecHL and _ecPl
+    var bool _ecBDR = false
+    _ecBDR := _ecBD ? true : _ecBDR[1]
+    if ta.barssince(_ecBD) > 10
+        _ecBDR := false
+
+    // CHoCH MSB
+    _mPH = ta.pivothigh(high, 10, 5)
+    var float _mSwH = na
+    var float _mPSwH = na
+    if not na(_mPH)
+        _mPSwH := _mSwH
+        _mSwH := _mPH
+    _mCross = not na(_mSwH) and close > _mSwH and close[1] <= _mSwH
+    var int _mBrkB = -9999
+    if _mCross
+        _mBrkB := bar_index
+    _mBrk = (bar_index - _mBrkB) <= 6
+
+    // Window
+    _w = i_win * 2
+
+    // OBLIGATOIRE 1: RSI
+    _cR = false
+    for i = 0 to _w
+        if (_rsi[i] - _rsi[i+1]) >= i_rsiMove
+            _cR := true
+    // OBLIGATOIRE 2: DMI+
+    _cD = false
+    for i = 0 to _w
+        _d = _dip[i] - _dip[i+1]
+        if _d > 0 and math.abs(_d) >= i_dmiMove
+            _cD := true
+    // OBLIGATOIRE 3: AST
+    _cA = false
+    for i = 0 to _w
+        if _astD[i] == -1 and _astD[i+1] != -1
+            _cA := true
+
+    // OPT 1-7
+    _cCH = _mBrk
+    _cZn = _avReg != -1
+    _cLz = false
+    for i = 0 to _w
+        if math.abs(_ht[i]) >= 9.6 or math.abs(_ht[i] - _ht[i+1]) >= 6.0
+            _cLz := true
+    _cVl = math.abs(_avVC) >= 250.0 and _avVC > 0
+    _cST = false
+    for i = 0 to _w
+        if _dir[i] < 0 and _dir[i+1] > 0
+            _cST := true
+    _cPP = false
+    for i = 0 to _w
+        if _ppT[i] == 1 and _ppT[i+1] == -1
+            _cPP := true
+    _cEC = false
+    for i = 0 to _w
+        _ed = nz(_ecR[i]) - nz(_ecR[i+1])
+        _es = nz(_ecS[i]) - nz(_ecS[i+1])
+        if (_ed > 0 and math.abs(_ed) >= 4.0) or (_es > 0 and math.abs(_es) >= 1.5)
+            _cEC := true
+    _cEC := _cEC or _ecBDR
+
+    // Score
+    _sc = (_cR?1:0)+(_cD?1:0)+(_cA?1:0)+(_cCH?1:0)+(_cZn?1:0)+(_cLz?1:0)+(_cVl?1:0)+(_cST?1:0)+(_cPP?1:0)+(_cEC?1:0)
+    _minSc = math.ceil(10 * i_pct / 100)
+    _mvPct = math.max(math.abs(close - open), high - low) / math.min(open, low) * 100
+    _raw = _cR and _cD and _cA and _sc >= _minSc and _mvPct <= i_maxMv
+
+    var int _lastB = -999
+    _sig = _raw and (bar_index - _lastB > _w)
+    if _sig
+        _lastB := bar_index
+
+    [_sig, _sc, _rsi, close, high, low, time]
+
+// ═══════════════════════════════════════════════════════
+// 🔄 MULTI-TF DETECTION
+// ═══════════════════════════════════════════════════════
+
+[sig_15, sc_15, rsi_15, cl_15, hi_15, lo_15, tm_15] = request.security(syminfo.tickerid, "15", f_megabuy(), lookahead=barmerge.lookahead_off)
+[sig_30, sc_30, rsi_30, cl_30, hi_30, lo_30, tm_30] = request.security(syminfo.tickerid, "30", f_megabuy(), lookahead=barmerge.lookahead_off)
+[sig_1h, sc_1h, rsi_1h, cl_1h, hi_1h, lo_1h, tm_1h] = request.security(syminfo.tickerid, "60", f_megabuy(), lookahead=barmerge.lookahead_off)
+[sig_4h, sc_4h, rsi_4h, cl_4h, hi_4h, lo_4h, tm_4h] = request.security(syminfo.tickerid, "240", f_megabuy(), lookahead=barmerge.lookahead_off)
+
+// Priorité au score le plus haut
+bestScore = math.max(sig_4h ? sc_4h : 0, sig_1h ? sc_1h : 0, sig_30 ? sc_30 : 0, sig_15 ? sc_15 : 0)
+anySignal = sig_15 or sig_30 or sig_1h or sig_4h
+
+// Choisir le meilleur TF
+sigTF  = sig_4h ? "4H" : sig_1h ? "1H" : sig_30 ? "30M" : "15M"
+sigSc  = sig_4h ? sc_4h : sig_1h ? sc_1h : sig_30 ? sc_30 : sc_15
+sigRsi = sig_4h ? rsi_4h : sig_1h ? rsi_1h : sig_30 ? rsi_30 : rsi_15
+sigCl  = sig_4h ? cl_4h : sig_1h ? cl_1h : sig_30 ? cl_30 : cl_15
+sigTm  = sig_4h ? tm_4h : sig_1h ? tm_1h : sig_30 ? tm_30 : tm_15
+
+// Anti-doublon par bougie 4H
+var int lastSig4h = 0
+cur4h = int(time / (4 * 60 * 60 * 1000))
+megaBuy = anySignal and cur4h != lastSig4h
+if megaBuy
+    lastSig4h := cur4h
+
+// ═══════════════════════════════════════════════════════
+// 📊 4H DATA + DMI
+// ═══════════════════════════════════════════════════════
+
+[h4_hi, h4_lo, h4_cl, h4_rsi, h4_atr] = request.security(
+     syminfo.tickerid, "240",
+     [high, low, close, ta.rsi(close, 14), ta.atr(14)],
+     lookahead=barmerge.lookahead_off)
+
+f_dmi4h() =>
+    _u = ta.change(high)
+    _d = -ta.change(low)
+    _p = _u > _d and _u > 0 ? _u : 0.0
+    _m = _d > _u and _d > 0 ? _d : 0.0
+    _t = ta.rma(ta.tr, 14)
+    [fixnan(100*ta.rma(_p,14)/_t), fixnan(100*ta.rma(_m,14)/_t)]
+
+[h4_dip, h4_dim] = request.security(syminfo.tickerid, "240", f_dmi4h(), lookahead=barmerge.lookahead_off)
+
+// Local indicators
+rsiVal   = ta.rsi(close, 14)
+atrVal   = ta.atr(14)
+volRatio = volume / ta.sma(volume, i_vLen)
+_du2 = ta.change(high)
+_dd2 = -ta.change(low)
+_pd2 = _du2 > _dd2 and _du2 > 0 ? _du2 : 0.0
+_md2 = _dd2 > _du2 and _dd2 > 0 ? _dd2 : 0.0
+_tr2 = ta.rma(ta.tr, 14)
+diPlus  = fixnan(100*ta.rma(_pd2,14)/_tr2)
+diMinus = fixnan(100*ta.rma(_md2,14)/_tr2)
+
+// ═══════════════════════════════════════════════════════
+// 🔶 ASSYIN CLOUD
+// ═══════════════════════════════════════════════════════
+
+f_cloud() =>
+    _a = ta.swma(close > open ? high : low)
+    _h = ta.change(ohlc4)
+    _o = ta.cum((_h>0?1.0:_h<0?-1.0:0.0)*volume)
+    _af = ta.atr(i_aF)
+    _as = ta.atr(i_aS)
+    _ch = ta.highest(high,i_chF)[i_chF]
+    _cl = ta.lowest(low,i_chF)[i_chF]
+    _cs = _a > _ch ? 1 : _a < _cl ? -1 : 0
+    _b = _o > i_vPk and _af > _as and _cs == 1
+    var float _dT = math.avg(i_tkMin,i_tkMax)
+    _dT := _b ? math.max(i_tkMin,_dT*i_dPct) : math.min(i_tkMax,_dT*(2.0-i_dPct))
+    var float _dK = math.avg(i_kjMin,i_kjMax)
+    _dK := _b ? math.max(i_kjMin,_dK*i_dPct) : math.min(i_kjMax,_dK*(2.0-i_dPct))
+    var float _dS = math.avg(i_skMin,i_skMax)
+    _dS := _b ? math.max(i_skMin,_dS*i_dPct) : math.min(i_skMax,_dS*(2.0-i_dPct))
+    _tI=math.max(int(_dT),2)
+    _kI=math.max(int(_dK),2)
+    _sI=math.max(int(_dS),2)
+    _tk = math.avg(ta.highest(high,_tI),ta.lowest(low,_tI))
+    _kj = math.avg(ta.highest(high,_kI),ta.lowest(low,_kI))
+    _sA = math.avg(_tk,_kj)
+    _sAd = _sA[i_skOff-1]
+    _sB = math.avg(ta.highest(high,_sI),ta.lowest(low,_sI))
+    _sBd = _sB[i_skOff-1]
+    _ct = math.max(nz(_sAd),nz(_sBd))
+    [_sAd, _sBd, _ct, close, _sI, _tI, _kI]
+
+[sa,sb,ct,_c,dSk,dTk,dKj] = f_cloud()
+[sa1,sb1,ct1,cl1,_,_,_] = request.security(syminfo.tickerid,"60",f_cloud(),lookahead=barmerge.lookahead_off)
+[sa3,sb3,ct3,cl3,_,_,_] = request.security(syminfo.tickerid,"30",f_cloud(),lookahead=barmerge.lookahead_off)
+
+abCl1h  = not na(ct1) and cl1 > ct1
+abCl30m = not na(ct3) and cl3 > ct3
+
+pSA = plot(i_shCl ? sa : na, "SA", color=color.new(#459915,40), linewidth=1)
+pSB = plot(i_shCl ? sb : na, "SB", color=color.new(#FF0016,40), linewidth=2)
+fill(pSA, pSB, color=sa > sb ? color.new(#459915,85) : color.new(#FF0016,85))
+
+// ═══════════════════════════════════════════════════════
+// 📦 GOLDEN BOX
+// ═══════════════════════════════════════════════════════
+
+var float[]  gb_h = array.new_float(0), var float[]  gb_l = array.new_float(0)
+var float[]  gb_rsi = array.new_float(0), var int[]   gb_st = array.new_int(0)
+var int[]    gb_bar = array.new_int(0), var int[]    gb_sta = array.new_int(0)
+var box[]    gb_bx = array.new_box(0)
+var line[]   gb_tp = array.new_line(0), var line[] gb_sl = array.new_line(0)
+var float[]  gb_px = array.new_float(0), var int[] gb_tm = array.new_int(0)
+var int[]    gb_sc = array.new_int(0), var string[] gb_tf = array.new_string(0)
+
+tfM = timeframe.in_seconds() / 60
+bpE = int(i_expiry * 240 / math.max(tfM, 1))
+
+if megaBuy and array.size(gb_h) < i_mxBx
+    bH = nz(h4_hi, high)
+    bL = nz(h4_lo, low)
+    bR = bH - bL
+    sA2 = nz(h4_atr, atrVal)
+
+    nb = box.new(bar_index, bH, bar_index + bpE, bL,
+         border_color=i_bxW, border_width=2, bgcolor=i_bxW,
+         text="📦 " + str.tostring(sigSc) + "/10 " + sigTF,
+         text_color=color.new(#FFD700,0), text_size=size.small,
+         text_halign=text.align_left, text_valign=text.align_bottom)
+
+    array.push(gb_h, bH), array.push(gb_l, bL)
+    array.push(gb_rsi, sigRsi), array.push(gb_bar, bar_index)
+    array.push(gb_sta, 0), array.push(gb_bx, nb)
+    array.push(gb_px, sigCl), array.push(gb_tm, sigTm)
+    array.push(gb_sc, sigSc), array.push(gb_tf, sigTF)
+
+    tpP = bH + bR * i_tpM
+    slP = bL - sA2 * i_slA
+    array.push(gb_tp, line.new(bar_index,tpP,bar_index+bpE,tpP, color=color.new(#00E676,50),width=2,style=line.style_dashed))
+    array.push(gb_sl, line.new(bar_index,slP,bar_index+bpE,slP, color=color.new(#FF1744,50),width=2,style=line.style_dashed))
+
+    if i_shLb
+        label.new(bar_index, bL - sA2 * 0.6,
+             "📦 GOLDEN BOX (4H)\n★ " + str.tostring(sigSc) + "/10 [" + sigTF + "]" +
+             "\nH:" + str.tostring(bH, format.mintick) + " L:" + str.tostring(bL, format.mintick) +
+             "\nRSI:" + str.tostring(sigRsi, "#.#") +
+             " ⏰ " + str.format_time(sigTm, "dd/MM HH:mm", syminfo.timezone) +
+             "\n💰 " + str.tostring(sigCl, format.mintick),
+             style=label.style_label_up, color=color.new(#FFD700,10),
+             textcolor=color.white, size=size.small)
+
+// ═══════════════════════════════════════════════════════
+// 🎯 CONDITIONS
+// ═══════════════════════════════════════════════════════
+
+var bool pD=false
+var bool pB=false
+var bool pR=false
+var bool p1=false
+var bool p3=false
+var bool pV=false
+var bool pRt=false
+var bool pE=false
+var int pCn=0
+var float pH=na
+var float pL=na
+var float pPx=na
+var int pTm=na
+var int pSc=0
+var string pTF=""
+var bool hasA = false
+
+hasA := false
+
+if array.size(gb_h) > 0
+    la = -1
+    for i = array.size(gb_h)-1 to 0
+        if array.get(gb_sta,i)==0
+            la := i
+            break
+
+    for i = array.size(gb_h)-1 to 0
+        if array.get(gb_sta,i) != 0
+            continue
+        gH=array.get(gb_h,i), gL=array.get(gb_l,i)
+        gR=array.get(gb_rsi,i), gS=array.get(gb_bar,i)
+        gB=array.get(gb_bx,i), bE=bar_index-gS
+
+        if bE > bpE
+            array.set(gb_sta,i,-1)
+            box.set_border_color(gB,i_bxE), box.set_bgcolor(gB,i_bxE), box.set_text(gB,"⏰ EXP")
+            continue
+
+        box.set_right(gB, bar_index+5)
+        if array.size(gb_tp)>i
+            line.set_x2(array.get(gb_tp,i),bar_index+5)
+        if array.size(gb_sl)>i
+            line.set_x2(array.get(gb_sl,i),bar_index+5)
+
+        cD = nz(h4_dip)>nz(h4_dim)
+        cB = nz(h4_cl)>gH
+        cR2 = cB and nz(h4_rsi)>gR
+        c1 = abCl1h
+        c3 = abCl30m
+        cV = volRatio >= i_vMult
+        cRt = low<=gH*1.005 and low>=gH*0.985 and close>gH
+
+        mC = (cD?1:0)+(cB?1:0)+(cR2?1:0)+(c1?1:0)+(c3?1:0)
+        eOK = cD and cB and cR2 and c1 and c3
+
+        if i == la
+            pD:=cD
+            pB:=cB
+            pR:=cR2
+            p1:=c1
+            p3:=c3
+            pV:=cV
+            pRt:=cRt
+            pE:=eOK
+            pCn:=mC
+            pH:=gH
+            pL:=gL
+            pPx:=array.size(gb_px)>i?array.get(gb_px,i):na
+            pTm:=array.size(gb_tm)>i?array.get(gb_tm,i):na
+            pSc:=array.size(gb_sc)>i?array.get(gb_sc,i):0
+            pTF:=array.size(gb_tf)>i?array.get(gb_tf,i):""
+            hasA:=true
+
+        if eOK and array.get(gb_sta,i)==0
+            array.set(gb_sta,i,1)
+            box.set_border_color(gB,i_bxR), box.set_bgcolor(gB,i_bxR)
+            box.set_border_width(gB,3), box.set_text(gB,"🎯 ENTRY")
+            if i_shLb
+                eP=close
+                tP=eP+(gH-gL)*i_tpM
+                sP=gL-atrVal*i_slA
+                rr=math.abs(tP-eP)/math.max(math.abs(eP-sP),syminfo.mintick)
+                label.new(bar_index,high+atrVal*1.2,
+                     "🎯 ENTRY READY\n💰"+str.tostring(eP,format.mintick)+
+                     "\n🎯TP:"+str.tostring(tP,format.mintick)+
+                     "\n🛑SL:"+str.tostring(sP,format.mintick)+
+                     "\n📊R:R 1:"+str.tostring(rr,"#.#"),
+                     style=label.style_label_down,color=color.new(#00E676,0),
+                     textcolor=color.white,size=size.normal)
+            if i_shTP and array.size(gb_tp)>i
+                line.set_color(array.get(gb_tp,i),color.new(#00E676,0))
+                line.set_color(array.get(gb_sl,i),color.new(#FF1744,0))
+                line.set_width(array.get(gb_tp,i),3), line.set_width(array.get(gb_sl,i),3)
+
+if not hasA and array.size(gb_h)>0
+    lI=array.size(gb_h)-1
+    pH:=array.get(gb_h,lI)
+    pL:=array.get(gb_l,lI)
+    pPx:=array.size(gb_px)>lI?array.get(gb_px,lI):na
+    pTm:=array.size(gb_tm)>lI?array.get(gb_tm,lI):na
+    pSc:=array.size(gb_sc)>lI?array.get(gb_sc,lI):0
+    pTF:=array.size(gb_tf)>lI?array.get(gb_tf,lI):""
+    pE:=array.get(gb_sta,lI)==1
+
+// ═══════════════════════════════════════════════════════
+// 🎨 PANEL
+// ═══════════════════════════════════════════════════════
+
+f_ic(bool c) => c ? "✅" : "❌"
+f_ib(bool c) => c ? "🟢" : "⚪"
+
+pp = i_pPos=="Top Right"?position.top_right:i_pPos=="Bottom Right"?position.bottom_right:i_pPos=="Top Left"?position.top_left:position.bottom_left
+
+var table tb = table.new(pp, 3, 17, bgcolor=color.new(#1a1a2e,5), border_width=1,
+     border_color=color.new(#333355,0), frame_width=2, frame_color=color.new(#FFD700,20))
+
+if i_shP and barstate.islast
+    sC = pE?color.new(#00E676,0):pCn>=3?color.new(#FF9800,0):color.new(#FF5252,0)
+    sT = pE?"🎯 ENTRY READY":hasA?"📦 WATCHING ("+str.tostring(pCn)+"/5)":"⏸️ NO ACTIVE BOX"
+
+    table.cell(tb,0,0,"🎯 GOLDEN BOX ENTRY",text_color=color.new(#FFD700,0),text_size=size.normal,bgcolor=color.new(#0d0d1a,0),text_halign=text.align_center)
+    table.merge_cells(tb,0,0,2,0)
+    table.cell(tb,0,1,sT,text_color=sC,text_size=size.small,bgcolor=color.new(#0d0d1a,0),text_halign=text.align_center)
+    table.merge_cells(tb,0,1,2,1)
+
+    table.cell(tb,0,2,"━━ 📡 MEGA BUY ━━",text_color=color.new(#FFD700,0),text_size=size.tiny,bgcolor=color.new(#111122,0),text_halign=text.align_center)
+    table.merge_cells(tb,0,2,2,2)
+
+    sTs = not na(pTm)?str.format_time(pTm,"dd/MM HH:mm",syminfo.timezone):"—"
+    sPs = not na(pPx)?str.tostring(pPx,format.mintick):"—"
+    gbs = not na(pH)?str.tostring(pH,format.mintick)+" / "+str.tostring(pL,format.mintick):"—"
+    scC = pSc>=9?color.new(#00E676,0):pSc>=7?color.new(#FFD700,0):color.new(#FF9800,0)
+    tfC = pTF=="4H"?color.new(#FF9800,0):pTF=="1H"?color.new(#2196F3,0):pTF=="30M"?color.new(#9C27B0,0):color.new(#00BCD4,0)
+
+    table.cell(tb,0,3,"🔔",text_size=size.tiny,text_halign=text.align_center)
+    table.cell(tb,1,3,sTs,text_color=color.new(#FFFFFF,0),text_size=size.tiny,text_halign=text.align_left)
+    table.cell(tb,2,3,str.tostring(pSc)+"/10 "+pTF,text_color=tfC,text_size=size.tiny)
+
+    table.cell(tb,0,4,"💰",text_size=size.tiny,text_halign=text.align_center)
+    table.cell(tb,1,4,sPs,text_color=color.new(#FFD700,0),text_size=size.tiny,text_halign=text.align_left)
+    table.cell(tb,2,4,"Prix",text_color=color.new(#888888,0),text_size=size.tiny)
+
+    table.cell(tb,0,5,"📦",text_size=size.tiny,text_halign=text.align_center)
+    table.cell(tb,1,5,gbs,text_color=color.new(#FF9800,0),text_size=size.tiny,text_halign=text.align_left)
+    table.cell(tb,2,5,"Box H/L",text_color=color.new(#888888,0),text_size=size.tiny)
+
+    table.cell(tb,0,6,"━━ OBLIGATOIRE ━━",text_color=color.new(#888888,0),text_size=size.tiny,bgcolor=color.new(#111122,0),text_halign=text.align_center)
+    table.merge_cells(tb,0,6,2,6)
+
+    table.cell(tb,0,7,f_ic(pD),text_size=size.small,text_halign=text.align_center)
+    table.cell(tb,1,7,"DMI+ > DMI-",text_color=pD?color.new(#00E676,0):color.new(#FF5252,0),text_size=size.small,text_halign=text.align_left)
+    table.cell(tb,2,7,"4H",text_color=color.new(#888888,0),text_size=size.tiny)
+
+    table.cell(tb,0,8,f_ic(pB),text_size=size.small,text_halign=text.align_center)
+    table.cell(tb,1,8,"Break Box High",text_color=pB?color.new(#00E676,0):color.new(#FF5252,0),text_size=size.small,text_halign=text.align_left)
+    table.cell(tb,2,8,"4H",text_color=color.new(#888888,0),text_size=size.tiny)
+
+    table.cell(tb,0,9,f_ic(pR),text_size=size.small,text_halign=text.align_center)
+    table.cell(tb,1,9,"RSI Higher High",text_color=pR?color.new(#00E676,0):color.new(#FF5252,0),text_size=size.small,text_halign=text.align_left)
+    table.cell(tb,2,9,"4H",text_color=color.new(#888888,0),text_size=size.tiny)
+
+    table.cell(tb,0,10,f_ic(p1),text_size=size.small,text_halign=text.align_center)
+    table.cell(tb,1,10,"Prix > Cloud",text_color=p1?color.new(#00E676,0):color.new(#FF5252,0),text_size=size.small,text_halign=text.align_left)
+    table.cell(tb,2,10,"1H",text_color=color.new(#2196F3,0),text_size=size.tiny)
+
+    table.cell(tb,0,11,f_ic(p3),text_size=size.small,text_halign=text.align_center)
+    table.cell(tb,1,11,"Prix > Cloud",text_color=p3?color.new(#00E676,0):color.new(#FF5252,0),text_size=size.small,text_halign=text.align_left)
+    table.cell(tb,2,11,"30M",text_color=color.new(#9C27B0,0),text_size=size.tiny)
+
+    table.cell(tb,0,12,"━━━ BONUS ━━━",text_color=color.new(#888888,0),text_size=size.tiny,bgcolor=color.new(#111122,0),text_halign=text.align_center)
+    table.merge_cells(tb,0,12,2,12)
+
+    table.cell(tb,0,13,f_ib(pV),text_size=size.small,text_halign=text.align_center)
+    table.cell(tb,1,13,"Vol "+str.tostring(volRatio,"#.#")+"× avg",text_color=pV?color.new(#00E676,0):color.new(#888888,0),text_size=size.small,text_halign=text.align_left)
+    table.cell(tb,2,13,"MTF",text_color=color.new(#888888,0),text_size=size.tiny)
+
+    table.cell(tb,0,14,f_ib(pRt),text_size=size.small,text_halign=text.align_center)
+    table.cell(tb,1,14,"Retest Support",text_color=pRt?color.new(#00E676,0):color.new(#888888,0),text_size=size.small,text_halign=text.align_left)
+    table.cell(tb,2,14,"1H",text_color=color.new(#888888,0),text_size=size.tiny)
+
+    table.cell(tb,0,15,"━━ VALEURS ━━",text_color=color.new(#888888,0),text_size=size.tiny,bgcolor=color.new(#111122,0),text_halign=text.align_center)
+    table.merge_cells(tb,0,15,2,15)
+
+    inf = "RSI:"+str.tostring(rsiVal,"#.#")+" | DI+:"+str.tostring(diPlus,"#.#")+" DI-:"+str.tostring(diMinus,"#.#")+
+         "\nSB:"+str.tostring(dSk)+" TK:"+str.tostring(dTk)+" KJ:"+str.tostring(dKj)+" | Vol:"+str.tostring(volRatio,"#.#")+"×"
+    table.cell(tb,0,16,inf,text_color=color.new(#CCCCCC,0),text_size=size.tiny,bgcolor=color.new(#111122,0),text_halign=text.align_center)
+    table.merge_cells(tb,0,16,2,16)
+
+// ═══════════════════════════════════════════════════════
+// 🔔 + 🎨
+// ═══════════════════════════════════════════════════════
+
+alertcondition(megaBuy, "Golden Box Created", "Golden Box on {{ticker}} at {{close}}")
+alertcondition(pE and not pE[1], "Entry Ready", "ENTRY READY on {{ticker}} at {{close}}")
+
+bgcolor(pE ? color.new(#00E676,92) : na)
+plotshape(megaBuy and i_shLb, "MB", shape.diamond, location.belowbar, color.new(#FFD700,0), size=size.small)

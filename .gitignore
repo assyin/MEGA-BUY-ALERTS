@@ -1,0 +1,34 @@
+# ═══ MEGA BUY BOT — .gitignore ═══
+
+# Secrets & credentials
+google_creds.json
+*.pem
+*.key
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+venv/
+.venv/
+
+# Cache & data files
+7d_signals_cache.json
+7d_results_cache.json
+golden_boxes.json
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
