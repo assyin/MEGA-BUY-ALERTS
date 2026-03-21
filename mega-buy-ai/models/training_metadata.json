@@ -1,0 +1,13 @@
+{
+  "last_trained_at": "2026-03-21T11:49:01.908952",
+  "last_trained_outcomes_count": 1000,
+  "model_version": "2.0.194",
+  "total_retrains": 195,
+  "last_auc": 0.8519345238095238,
+  "last_cv_auc": 0.8269324973272342,
+  "thresholds": {
+    "trade": 0.36000000000000004,
+    "watch": 0.21000000000000005,
+    "skip": 0.0
+  }
+}

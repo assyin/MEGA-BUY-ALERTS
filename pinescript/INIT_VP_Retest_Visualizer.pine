@@ -1,0 +1,306 @@
+// This Pine Script™ source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © MEGA BUY AI - VP Retest Visualizer for INITUSDT
+
+//@version=5
+indicator("INIT VP Retest Journey", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+
+// ============================================================
+// INPUTS
+// ============================================================
+grp_vp = "Volume Profile Settings"
+vp_lookback = input.int(50, "VP Lookback (bars)", minval=10, maxval=200, group=grp_vp)
+vp_value_area_pct = input.float(70.0, "Value Area %", minval=50, maxval=90, group=grp_vp)
+vp_bins = input.int(50, "Number of Bins", minval=20, maxval=100, group=grp_vp)
+
+grp_rejection = "Rejection Detection"
+rej_wick_ratio = input.float(1.5, "Min Wick/Body Ratio", minval=1.0, maxval=5.0, step=0.1, group=grp_rejection)
+rej_lookback = input.int(5, "Rejection Lookback (bars)", minval=1, maxval=20, group=grp_rejection)
+
+grp_display = "Display Settings"
+show_vp_levels = input.bool(true, "Show VP Levels (VAH/POC/VAL)", group=grp_display)
+show_rejections = input.bool(true, "Show Rejection Candles", group=grp_display)
+show_journey = input.bool(true, "Show Price Journey Arrows", group=grp_display)
+show_entry_zone = input.bool(true, "Show Entry Zone", group=grp_display)
+
+grp_colors = "Colors"
+col_vah = input.color(color.new(color.red, 20), "VAH Color", group=grp_colors)
+col_poc = input.color(color.new(color.yellow, 20), "POC Color", group=grp_colors)
+col_val = input.color(color.new(color.green, 20), "VAL Color", group=grp_colors)
+col_rejection = input.color(color.new(color.purple, 0), "Rejection Color", group=grp_colors)
+col_entry = input.color(color.new(color.blue, 0), "Entry Color", group=grp_colors)
+
+// ============================================================
+// VOLUME PROFILE CALCULATION
+// ============================================================
+// Find price range for VP
+var float vp_high = na
+var float vp_low = na
+var float vp_poc = na
+var float vp_vah = na
+var float vp_val = na
+
+// Calculate VP on each bar
+calc_vp() =>
+    float h = ta.highest(high, vp_lookback)
+    float l = ta.lowest(low, vp_lookback)
+    float bin_size = (h - l) / vp_bins
+    
+    // Simple VP approximation using close prices
+    var float[] vol_at_price = array.new_float(vp_bins, 0.0)
+    array.fill(vol_at_price, 0.0)
+    
+    for i = 0 to vp_lookback - 1
+        idx = bar_index - i
+        if idx >= 0
+            // Determine which bin this candle touches
+            bar_low = low[i]
+            bar_high = high[i]
+            bar_vol = volume[i]
+            
+            low_bin = math.floor((bar_low - l) / bin_size)
+            high_bin = math.floor((bar_high - l) / bin_size)
+            
+            low_bin := math.max(0, math.min(vp_bins - 1, low_bin))
+            high_bin := math.max(0, math.min(vp_bins - 1, high_bin))
+            
+            bins_touched = high_bin - low_bin + 1
+            vol_per_bin = bar_vol / bins_touched
+            
+            for b = low_bin to high_bin
+                if b >= 0 and b < vp_bins
+                    array.set(vol_at_price, b, array.get(vol_at_price, b) + vol_per_bin)
+    
+    // Find POC (max volume bin)
+    float max_vol = 0.0
+    int poc_bin = 0
+    for b = 0 to vp_bins - 1
+        if array.get(vol_at_price, b) > max_vol
+            max_vol := array.get(vol_at_price, b)
+            poc_bin := b
+    
+    float poc_price = l + (poc_bin + 0.5) * bin_size
+    
+    // Calculate Value Area (70% of volume around POC)
+    float total_vol = array.sum(vol_at_price)
+    float target_vol = total_vol * (vp_value_area_pct / 100)
+    float accumulated_vol = array.get(vol_at_price, poc_bin)
+    
+    int lower_bin = poc_bin
+    int upper_bin = poc_bin
+    
+    while accumulated_vol < target_vol and (lower_bin > 0 or upper_bin < vp_bins - 1)
+        float lower_vol = lower_bin > 0 ? array.get(vol_at_price, lower_bin - 1) : 0.0
+        float upper_vol = upper_bin < vp_bins - 1 ? array.get(vol_at_price, upper_bin + 1) : 0.0
+        
+        if lower_vol > upper_vol and lower_bin > 0
+            lower_bin := lower_bin - 1
+            accumulated_vol := accumulated_vol + lower_vol
+        else if upper_bin < vp_bins - 1
+            upper_bin := upper_bin + 1
+            accumulated_vol := accumulated_vol + upper_vol
+        else if lower_bin > 0
+            lower_bin := lower_bin - 1
+            accumulated_vol := accumulated_vol + lower_vol
+        else
+            break
+    
+    float val_price = l + (lower_bin + 0.5) * bin_size
+    float vah_price = l + (upper_bin + 0.5) * bin_size
+    
+    [h, l, poc_price, vah_price, val_price]
+
+[h, l, poc, vah, val] = calc_vp()
+vp_high := h
+vp_low := l
+vp_poc := poc
+vp_vah := vah
+vp_val := val
+
+// ============================================================
+// REJECTION CANDLE DETECTION
+// ============================================================
+body = math.abs(close - open)
+lower_wick = math.min(close, open) - low
+upper_wick = high - math.max(close, open)
+is_bullish = close > open
+
+// Rejection = long lower wick + bullish
+is_rejection = lower_wick > body * rej_wick_ratio and is_bullish and body > 0
+
+// Near support zone (POC or VAL)
+tolerance = 0.05  // 5%
+near_poc = math.abs(low - vp_poc) / vp_poc < tolerance
+near_val = math.abs(low - vp_val) / vp_val < tolerance
+at_support = near_poc or near_val
+
+// Valid rejection at support
+valid_rejection = is_rejection and at_support
+
+// ============================================================
+// PRICE JOURNEY DETECTION
+// ============================================================
+// Check if price was above VAH recently
+was_above_vah = ta.highest(high, vp_lookback) > vp_vah
+
+// Price dropped to support
+price_at_support = low <= vp_poc * 1.03 or low <= vp_val * 1.03
+
+// Journey confirmed: was above VAH, now at support with rejection
+journey_confirmed = was_above_vah and price_at_support and valid_rejection
+
+// ============================================================
+// DRAWING
+// ============================================================
+
+// Draw VP Levels
+var line line_vah = na
+var line line_poc = na
+var line line_val = na
+var label lbl_vah = na
+var label lbl_poc = na
+var label lbl_val = na
+
+if show_vp_levels and barstate.islast
+    // Delete old lines
+    line.delete(line_vah)
+    line.delete(line_poc)
+    line.delete(line_val)
+    label.delete(lbl_vah)
+    label.delete(lbl_poc)
+    label.delete(lbl_val)
+    
+    // Draw new lines
+    line_vah := line.new(bar_index - vp_lookback, vp_vah, bar_index + 10, vp_vah, 
+                         color=col_vah, width=2, style=line.style_solid)
+    line_poc := line.new(bar_index - vp_lookback, vp_poc, bar_index + 10, vp_poc, 
+                         color=col_poc, width=3, style=line.style_solid)
+    line_val := line.new(bar_index - vp_lookback, vp_val, bar_index + 10, vp_val, 
+                         color=col_val, width=2, style=line.style_solid)
+    
+    // Labels
+    lbl_vah := label.new(bar_index + 12, vp_vah, "VAH " + str.tostring(vp_vah, "#.#####"), 
+                         color=col_vah, textcolor=color.white, style=label.style_label_left, size=size.small)
+    lbl_poc := label.new(bar_index + 12, vp_poc, "POC " + str.tostring(vp_poc, "#.#####"), 
+                         color=col_poc, textcolor=color.black, style=label.style_label_left, size=size.small)
+    lbl_val := label.new(bar_index + 12, vp_val, "VAL " + str.tostring(vp_val, "#.#####"), 
+                         color=col_val, textcolor=color.white, style=label.style_label_left, size=size.small)
+
+// Draw Value Area Box
+var box va_box = na
+if show_vp_levels and barstate.islast
+    box.delete(va_box)
+    va_box := box.new(bar_index - vp_lookback, vp_vah, bar_index + 10, vp_val, 
+                      bgcolor=color.new(color.blue, 90), border_color=color.new(color.blue, 70), border_width=1)
+
+// Mark Rejection Candles
+plotshape(show_rejections and valid_rejection, title="Rejection at Support", 
+          location=location.belowbar, style=shape.triangleup, 
+          color=col_rejection, size=size.normal, text="REJECT")
+
+// Mark when price was above VAH (peak)
+peak_high = ta.highest(high, vp_lookback) == high and high > vp_vah
+plotshape(show_journey and peak_high, title="Peak Above VAH", 
+          location=location.abovebar, style=shape.triangledown, 
+          color=col_vah, size=size.small, text="PEAK")
+
+// Mark Journey Confirmation (Entry Signal)
+plotshape(show_entry_zone and journey_confirmed, title="Journey Entry", 
+          location=location.belowbar, style=shape.labelup, 
+          color=col_entry, size=size.large, text="ENTRY\nVP RETEST")
+
+// ============================================================
+// JOURNEY PATH VISUALIZATION
+// ============================================================
+// Draw arrows showing the price journey
+var line journey_line = na
+var label journey_start_lbl = na
+var label journey_end_lbl = na
+
+// Find the peak bar (highest above VAH in lookback)
+var int peak_bar = na
+var float peak_price = na
+
+if barstate.islast and show_journey
+    // Find peak
+    float max_h = 0.0
+    int max_idx = bar_index
+    for i = 0 to vp_lookback - 1
+        if high[i] > max_h and high[i] > vp_vah
+            max_h := high[i]
+            max_idx := bar_index - i
+    
+    if max_h > 0
+        peak_bar := max_idx
+        peak_price := max_h
+        
+        // Find lowest point after peak (support touch)
+        float min_l = 999999.0
+        int min_idx = bar_index
+        for i = 0 to (bar_index - peak_bar - 1)
+            if i >= 0 and low[i] < min_l
+                min_l := low[i]
+                min_idx := bar_index - i
+        
+        // Draw journey line
+        line.delete(journey_line)
+        label.delete(journey_start_lbl)
+        label.delete(journey_end_lbl)
+        
+        journey_line := line.new(peak_bar, peak_price, min_idx, min_l,
+                                 color=color.new(color.orange, 30), width=3, style=line.style_arrow_right)
+        
+        journey_start_lbl := label.new(peak_bar, peak_price, "① PEAK\n" + str.tostring(peak_price, "#.#####"),
+                                       color=color.red, textcolor=color.white, style=label.style_label_down, size=size.normal)
+        
+        journey_end_lbl := label.new(min_idx, min_l, "② SUPPORT\n" + str.tostring(min_l, "#.#####"),
+                                     color=color.green, textcolor=color.white, style=label.style_label_up, size=size.normal)
+
+// ============================================================
+// INFO TABLE
+// ============================================================
+var table info_table = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 80), frame_color=color.gray, frame_width=1)
+
+if barstate.islast
+    table.cell(info_table, 0, 0, "VP RETEST ANALYSIS", bgcolor=color.new(color.blue, 70), text_color=color.white, text_size=size.normal)
+    table.merge_cells(info_table, 0, 0, 1, 0)
+    
+    table.cell(info_table, 0, 1, "VAH", text_color=color.red, text_size=size.small)
+    table.cell(info_table, 1, 1, str.tostring(vp_vah, "#.#####"), text_color=color.white, text_size=size.small)
+    
+    table.cell(info_table, 0, 2, "POC", text_color=color.yellow, text_size=size.small)
+    table.cell(info_table, 1, 2, str.tostring(vp_poc, "#.#####"), text_color=color.white, text_size=size.small)
+    
+    table.cell(info_table, 0, 3, "VAL", text_color=color.green, text_size=size.small)
+    table.cell(info_table, 1, 3, str.tostring(vp_val, "#.#####"), text_color=color.white, text_size=size.small)
+    
+    table.cell(info_table, 0, 4, "Current", text_color=color.gray, text_size=size.small)
+    table.cell(info_table, 1, 4, str.tostring(close, "#.#####"), text_color=color.white, text_size=size.small)
+    
+    // Position
+    string pos = close > vp_vah ? "ABOVE VAH" : close > vp_poc ? "VAH-POC" : close > vp_val ? "POC-VAL" : "BELOW VAL"
+    color pos_col = close > vp_vah ? color.red : close > vp_poc ? color.orange : close > vp_val ? color.yellow : color.green
+    table.cell(info_table, 0, 5, "Position", text_color=color.gray, text_size=size.small)
+    table.cell(info_table, 1, 5, pos, text_color=pos_col, text_size=size.small)
+    
+    // Distance to POC
+    float dist_poc = (close - vp_poc) / vp_poc * 100
+    table.cell(info_table, 0, 6, "Dist POC", text_color=color.gray, text_size=size.small)
+    table.cell(info_table, 1, 6, str.tostring(dist_poc, "#.##") + "%", text_color=color.white, text_size=size.small)
+    
+    // Rejection status
+    string rej_status = valid_rejection ? "✅ REJECTION" : is_rejection ? "⚠️ NO SUPPORT" : "❌ NONE"
+    color rej_col = valid_rejection ? color.green : is_rejection ? color.orange : color.gray
+    table.cell(info_table, 0, 7, "Rejection", text_color=color.gray, text_size=size.small)
+    table.cell(info_table, 1, 7, rej_status, text_color=rej_col, text_size=size.small)
+    
+    // Journey status
+    string journey_status = journey_confirmed ? "✅ ENTRY SIGNAL" : was_above_vah ? "⏳ WAITING" : "❌ NO PEAK"
+    color journey_col = journey_confirmed ? color.green : was_above_vah ? color.orange : color.gray
+    table.cell(info_table, 0, 8, "Journey", text_color=color.gray, text_size=size.small)
+    table.cell(info_table, 1, 8, journey_status, text_color=journey_col, text_size=size.small)
+
+// ============================================================
+// ALERTS
+// ============================================================
+alertcondition(journey_confirmed, title="VP Retest Entry", message="VP Retest Entry Signal: Price rejected at POC/VAL support after descending from VAH")
+alertcondition(valid_rejection, title="Rejection at Support", message="Rejection candle detected at VP support zone")

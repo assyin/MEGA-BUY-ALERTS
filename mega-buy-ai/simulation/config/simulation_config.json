@@ -1,0 +1,122 @@
+{
+  "version": "1.0",
+  "global": {
+    "mode": "LIVE",
+    "alert_polling_interval_sec": 30,
+    "price_polling_interval_sec": 15,
+    "database_path": "data/simulation.db",
+    "backtest_db_path": "/home/assyin/MEGA-BUY-BOT/mega-buy-ai/backtest/data/backtest.db",
+    "log_level": "INFO",
+    "alerts_api_url": "http://localhost:9000",
+    "binance_api_url": "https://api.binance.com",
+    "backtest_days": 7,
+    "backtest_speed": 0.0
+  },
+  "exit_strategy": {
+    "sl_pct": 5.0,
+    "be_activation_pct": 4.0,
+    "be_sl_pct": 0.5,
+    "trailing_activation_pct": 15.0,
+    "trailing_distance_pct": 10.0
+  },
+  "portfolios": {
+    "max_wr": {
+      "id": "max_wr",
+      "name": "Max Win Rate",
+      "type": "empirical_filter",
+      "enabled": true,
+      "initial_balance": 2000.0,
+      "position_size_pct": 12.0,
+      "max_concurrent_trades": 8,
+      "filter_conditions": {
+        "pp": true,
+        "ec": true,
+        "di_minus_min": 22.0,
+        "di_plus_max": 25.0,
+        "adx_min": 35.0,
+        "vol_min": 100.0
+      }
+    },
+    "balanced_filter": {
+      "id": "balanced_filter",
+      "name": "Équilibré",
+      "type": "empirical_filter",
+      "enabled": true,
+      "initial_balance": 2000.0,
+      "position_size_pct": 12.0,
+      "max_concurrent_trades": 8,
+      "filter_conditions": {
+        "pp": true,
+        "ec": true,
+        "di_minus_min": 22.0,
+        "di_plus_max": 20.0,
+        "adx_min": 21.0,
+        "vol_min": 100.0
+      }
+    },
+    "big_winners": {
+      "id": "big_winners",
+      "name": "Gros Gagnants",
+      "type": "empirical_filter",
+      "enabled": true,
+      "initial_balance": 2000.0,
+      "position_size_pct": 12.0,
+      "max_concurrent_trades": 8,
+      "filter_conditions": {
+        "pp": true,
+        "ec": true,
+        "di_minus_min": 22.0,
+        "di_plus_max": 25.0,
+        "adx_min": 21.0,
+        "vol_min": 100.0
+      }
+    },
+    "aggressive": {
+      "id": "aggressive",
+      "name": "Aggressive",
+      "type": "p_success_threshold",
+      "enabled": true,
+      "initial_balance": 2000.0,
+      "position_size_pct": 12.0,
+      "max_concurrent_trades": 8,
+      "threshold": 0.3
+    },
+    "balanced_ml": {
+      "id": "balanced_ml",
+      "name": "Balanced",
+      "type": "p_success_threshold",
+      "enabled": true,
+      "initial_balance": 2000.0,
+      "position_size_pct": 12.0,
+      "max_concurrent_trades": 8,
+      "threshold": 0.5
+    },
+    "conservative": {
+      "id": "conservative",
+      "name": "Conservative",
+      "type": "p_success_threshold",
+      "enabled": true,
+      "initial_balance": 2000.0,
+      "position_size_pct": 12.0,
+      "max_concurrent_trades": 8,
+      "threshold": 0.7
+    },
+    "backtest_v5": {
+      "id": "backtest_v5",
+      "name": "Backtest V5",
+      "type": "v5_surveillance",
+      "enabled": true,
+      "initial_balance": 2000.0,
+      "position_size_pct": 12.0,
+      "max_concurrent_trades": 8,
+      "v5_config": {
+        "max_surveillance_hours": 72,
+        "stc_oversold_threshold": 0.2,
+        "choch_margin_pct": 0.5,
+        "swing_left": 5,
+        "swing_right": 3,
+        "monitoring_interval_sec": 900
+      }
+    }
+  }
+}

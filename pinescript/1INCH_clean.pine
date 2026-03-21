@@ -1,0 +1,132 @@
+//@version=5
+indicator("MEGA BUY Analysis - 1INCHUSDT", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MEGA BUY AI - Complete Trade Analysis
+// Symbol: 1INCHUSDT
+// Alert: 2026-02-25 01:00 UTC (1H)
+// Entry: 0.09068
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════ TRENDLINE ═══════════════════
+tl_p1_time = 1768122000000
+tl_p1_price = 0.1568
+tl_p2_time = 1771664400000
+tl_p2_price = 0.0954
+tl_break_time = 1771984800000
+tl_break_price = 0.09
+
+// ═══════════════════ ORDER BLOCKS ═══════════════════
+ob_1h_time = 1771988400000
+ob_1h_high = 0.0901
+ob_1h_low = 0.0892
+ob_1h_mid = 0.08965
+
+ob_4h_time = 1773000000000
+ob_4h_high = 0.0916
+ob_4h_low = 0.0891
+ob_4h_mid = 0.09035
+
+// ═══════════════════ VOLUME PROFILE ═══════════════════
+vp_poc_1h = 0.089649
+vp_vah_1h = 0.090939
+vp_val_1h = 0.088961
+vp_hvn_sl = 0.089778
+
+// ═══════════════════ ENTRY DATA ═══════════════════
+entry_time = 1772020800000
+entry_price = 0.090681
+
+// ═══════════════════ MEGA BUY ALERT ═══════════════════
+// Alert detected: 2026-02-25 01:00 UTC on 1H timeframe
+alert_time = 1771981200000
+isAlertCandle = time == alert_time
+
+if isAlertCandle
+    // Triangle marker below candle
+    label.new(x=bar_index, y=low * 0.994, text="MEGA BUY\n1H", xloc=xloc.bar_index, yloc=yloc.price, color=color.lime, style=label.style_label_up, textcolor=color.white, size=size.small)
+    // Vertical line on alert candle
+    line.new(x1=bar_index, y1=low * 0.99, x2=bar_index, y2=high * 1.02, xloc=xloc.bar_index, color=color.lime, style=line.style_solid, width=2)
+
+// ═══════════════════ DRAWING ═══════════════════
+if barstate.islast
+    // Trendline
+    line.new(tl_p1_time, tl_p1_price, tl_p2_time, tl_p2_price, xloc.bar_time, extend.right, color.orange, line.style_solid, 2)
+    label.new(tl_p1_time, tl_p1_price, "P1", xloc.bar_time, yloc.price, color.orange, label.style_circle, color.white, size.tiny)
+    label.new(tl_p2_time, tl_p2_price, "P2", xloc.bar_time, yloc.price, color.orange, label.style_circle, color.white, size.tiny)
+    label.new(tl_break_time, tl_break_price, "BREAK", xloc.bar_time, yloc.price, color.green, label.style_label_up, color.white, size.small)
+
+    // 1H Order Block
+    box.new(left=ob_1h_time, top=ob_1h_high, right=time, bottom=ob_1h_low, border_color=color.green, border_width=2, border_style=line.style_solid, extend=extend.right, xloc=xloc.bar_time, bgcolor=color.new(color.green, 70))
+    label.new(ob_1h_time, ob_1h_mid, "OB 1H", xloc.bar_time, yloc.price, color.teal, label.style_label_right, color.white, size.small)
+
+    // 4H Order Block
+    box.new(left=ob_4h_time, top=ob_4h_high, right=time, bottom=ob_4h_low, border_color=color.lime, border_width=3, border_style=line.style_solid, extend=extend.right, xloc=xloc.bar_time, bgcolor=color.new(color.lime, 70))
+    label.new(ob_4h_time, ob_4h_mid, "OB 4H", xloc.bar_time, yloc.price, color.purple, label.style_label_right, color.white, size.normal)
+
+    // Entry Candle Marker
+    line.new(entry_time, 0, entry_time, entry_price * 1.5, xloc=xloc.bar_time, color=color.new(color.blue, 30), style=line.style_solid, width=3)
+    label.new(entry_time, entry_price * 0.995, "ENTRY\n0.0907\n02-25 12:00", xloc.bar_time, yloc.price, color.blue, label.style_label_up, color.white, size.normal)
+    line.new(entry_time - 86400000 * 3, entry_price, entry_time + 86400000 * 5, entry_price, xloc=xloc.bar_time, color=color.blue, style=line.style_dashed, width=2)
+
+    // Volume Profile - Value Area Box
+    box.new(left=bar_index - 150, top=vp_vah_1h, right=bar_index + 50, bottom=vp_val_1h, border_color=color.new(color.fuchsia, 30), border_width=2, border_style=line.style_solid, bgcolor=color.new(color.fuchsia, 85), extend=extend.right)
+    label.new(bar_index - 150, (vp_vah_1h + vp_val_1h) / 2, "VALUE AREA", xloc.bar_index, yloc.price, color.new(color.fuchsia, 20), label.style_label_center, color.white, size.small)
+
+    // POC
+    line.new(bar_index - 200, vp_poc_1h, bar_index + 100, vp_poc_1h, color=color.fuchsia, style=line.style_solid, width=3, extend=extend.right)
+    label.new(bar_index - 200, vp_poc_1h, "POC 1H", xloc.bar_index, yloc.price, color.fuchsia, label.style_label_right, color.white, size.small)
+
+    // VAH
+    line.new(bar_index - 200, vp_vah_1h, bar_index + 50, vp_vah_1h, color=color.new(color.red, 30), style=line.style_dashed, width=2, extend=extend.right)
+    label.new(bar_index - 200, vp_vah_1h, "VAH", xloc.bar_index, yloc.price, color.new(color.red, 30), label.style_label_right, color.white, size.tiny)
+
+    // VAL
+    line.new(bar_index - 200, vp_val_1h, bar_index + 50, vp_val_1h, color=color.new(color.green, 30), style=line.style_dashed, width=2, extend=extend.right)
+    label.new(bar_index - 200, vp_val_1h, "VAL SUPPORT", xloc.bar_index, yloc.price, color.green, label.style_label_right, color.white, size.small)
+
+    // HVN Support
+    line.new(bar_index - 150, vp_hvn_sl, bar_index + 50, vp_hvn_sl, color=color.lime, style=line.style_solid, width=2, extend=extend.right)
+    label.new(bar_index - 150, vp_hvn_sl, "HVN SUPPORT", xloc.bar_index, yloc.price, color.lime, label.style_label_right, color.white, size.small)
+
+    // SL Level
+    line.new(bar_index - 50, 0.086922, bar_index + 50, 0.086922, color=color.red, style=line.style_dotted, width=1, extend=extend.right)
+    label.new(bar_index + 50, 0.086922, "SL 0.08692", xloc.bar_index, yloc.price, color.red, label.style_label_left, color.white, size.tiny)
+
+// Reference Lines
+hline(tl_p1_price, "TL P1", color.new(color.orange, 70), hline.style_dotted)
+hline(tl_p2_price, "TL P2", color.new(color.orange, 70), hline.style_dotted)
+hline(tl_break_price, "TL Break", color.new(color.green, 70), hline.style_dotted)
+hline(ob_1h_high, "OB 1H High", color.new(color.teal, 60), hline.style_dotted)
+hline(ob_1h_low, "OB 1H Low", color.new(color.teal, 60), hline.style_dotted)
+hline(vp_poc_1h, "VP POC 1H", color.new(color.fuchsia, 40), hline.style_solid)
+hline(vp_vah_1h, "VP VAH 1H", color.new(color.fuchsia, 70), hline.style_dotted)
+hline(vp_val_1h, "VP VAL 1H", color.new(color.fuchsia, 70), hline.style_dotted)
+
+// Info Table
+var table infoTbl = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 80), border_width=1)
+if barstate.islast
+    table.cell(infoTbl, 0, 0, "MEGA BUY Analysis", text_color=color.white, text_size=size.small)
+    table.merge_cells(infoTbl, 0, 0, 1, 0)
+    table.cell(infoTbl, 0, 1, "Alert", text_color=color.lime)
+    table.cell(infoTbl, 1, 1, "25/02 01:00 (1H)", text_color=color.lime)
+    table.cell(infoTbl, 0, 2, "TL P1-P2", text_color=color.orange)
+    table.cell(infoTbl, 1, 2, "0.1568 - 0.0954", text_color=color.white)
+    table.cell(infoTbl, 0, 3, "TL Break", text_color=color.green)
+    table.cell(infoTbl, 1, 3, "0.09", text_color=color.white)
+    table.cell(infoTbl, 0, 4, "OB 1H", text_color=color.teal)
+    table.cell(infoTbl, 1, 4, "0.0901-0.0892", text_color=color.white)
+    table.cell(infoTbl, 0, 5, "OB 4H", text_color=color.purple)
+    table.cell(infoTbl, 1, 5, "0.0916-0.0891", text_color=color.white)
+    table.cell(infoTbl, 0, 6, "POC 1H", text_color=color.fuchsia)
+    table.cell(infoTbl, 1, 6, "0.0896", text_color=color.white)
+    table.cell(infoTbl, 0, 7, "Value Area", text_color=color.fuchsia)
+    table.cell(infoTbl, 1, 7, "0.0890 - 0.0909", text_color=color.white)
+    table.cell(infoTbl, 0, 8, "Entry", text_color=color.blue)
+    table.cell(infoTbl, 1, 8, "0.09068", text_color=color.white)
+    table.cell(infoTbl, 0, 9, "SL", text_color=color.red)
+    table.cell(infoTbl, 1, 9, "0.08692", text_color=color.white)
+    table.cell(infoTbl, 0, 10, "Max Reached", text_color=color.aqua)
+    table.cell(infoTbl, 1, 10, "+8.9%", text_color=color.aqua)
+    table.cell(infoTbl, 0, 11, "Result", text_color=color.red)
+    table.cell(infoTbl, 1, 11, "-4.15% (SL Hit)", text_color=color.red)

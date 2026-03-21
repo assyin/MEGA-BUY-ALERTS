@@ -1,0 +1,364 @@
+// This Pine Script source code is subject to the terms of the Mozilla Public License 2.0
+// MEGA BUY AI - VP Retest Strategy Visualizer V2
+
+//@version=5
+indicator("VP Retest Strategy V2", overlay=true, max_lines_count=200, max_labels_count=100, max_boxes_count=100)
+
+// ============================================================
+// INPUTS
+// ============================================================
+grp_zone = "Zone Analyse"
+use_zone = input.bool(true, "Limiter a la Zone", group=grp_zone)
+zone_start = input.time(timestamp("2026-02-01 00:00"), "Debut", group=grp_zone)
+zone_end = input.time(timestamp("2026-02-20 00:00"), "Fin", group=grp_zone)
+
+grp_vp = "Volume Profile"
+vp_lookback = input.int(50, "Lookback", minval=10, maxval=200, group=grp_vp)
+show_vp = input.bool(true, "Afficher VP", group=grp_vp)
+
+grp_tl = "Trendline"
+show_tl = input.bool(true, "Afficher Trendline", group=grp_tl)
+
+grp_entry = "Entry Setup"
+entry_date = input.time(timestamp("2026-02-11 08:00"), "Date Entry", group=grp_entry)
+entry_price = input.float(0.0695, "Prix Entry", group=grp_entry)
+show_entry_marker = input.bool(true, "Afficher Entry", group=grp_entry)
+
+grp_rej = "Rejection Pullback"
+rej_tolerance = input.float(5.0, "Tolerance Support pct", minval=1, maxval=20, group=grp_rej)
+rej_wick_ratio = input.float(1.5, "Wick Body Ratio Min", minval=1, maxval=5, group=grp_rej)
+
+// ============================================================
+// ZONE CHECK
+// ============================================================
+in_zone = not use_zone or (time >= zone_start and time <= zone_end)
+
+// ============================================================
+// VOLUME PROFILE
+// ============================================================
+var float vp_vah = na
+var float vp_poc = na
+var float vp_val = na
+var float vp_high = na
+var float vp_low = na
+
+// VP Calculation
+if in_zone
+    vp_high := ta.highest(high, vp_lookback)
+    vp_low := ta.lowest(low, vp_lookback)
+    float range_size = (vp_high - vp_low) / 10
+
+    // Find POC
+    var float[] level_vol = array.new_float(10, 0.0)
+    array.fill(level_vol, 0.0)
+
+    for i = 0 to vp_lookback - 1
+        if range_size > 0
+            int level = int((close[i] - vp_low) / range_size)
+            level := math.max(0, math.min(9, level))
+            array.set(level_vol, level, array.get(level_vol, level) + volume[i])
+
+    int poc_level = 0
+    float max_vol = 0.0
+    for i = 0 to 9
+        if array.get(level_vol, i) > max_vol
+            max_vol := array.get(level_vol, i)
+            poc_level := i
+
+    vp_poc := vp_low + (poc_level + 0.5) * range_size
+    vp_vah := vp_poc + range_size * 1.5
+    vp_val := vp_poc - range_size * 1.5
+
+// ============================================================
+// TRENDLINE FROM SWING HIGHS
+// ============================================================
+var line tl_line = na
+var float tl_current_price = na
+
+swing_high_1 = ta.pivothigh(high, 5, 3)
+
+var float sh1_price = na
+var int sh1_bar = na
+var float sh2_price = na
+var int sh2_bar = na
+
+if not na(swing_high_1) and in_zone
+    sh2_price := sh1_price
+    sh2_bar := sh1_bar
+    sh1_price := swing_high_1
+    sh1_bar := bar_index - 3
+
+// Draw trendline
+if show_tl and in_zone and barstate.islast and not na(sh1_price) and not na(sh2_price) and sh1_bar != sh2_bar
+    line.delete(tl_line)
+    float slope = (sh1_price - sh2_price) / (sh1_bar - sh2_bar)
+    float start_price = sh2_price
+    float end_price = sh2_price + slope * (bar_index + 20 - sh2_bar)
+    tl_line := line.new(sh2_bar, start_price, bar_index + 20, end_price, color=color.orange, width=2, style=line.style_dashed)
+    tl_current_price := sh2_price + slope * (bar_index - sh2_bar)
+
+// ============================================================
+// VP VISUALIZATION
+// ============================================================
+var line line_vah = na
+var line line_poc = na
+var line line_val = na
+var box va_box = na
+var label lbl_vah = na
+var label lbl_poc = na
+var label lbl_val = na
+
+if show_vp and in_zone and barstate.islast
+    line.delete(line_vah)
+    line.delete(line_poc)
+    line.delete(line_val)
+    box.delete(va_box)
+    label.delete(lbl_vah)
+    label.delete(lbl_poc)
+    label.delete(lbl_val)
+
+    int start_bar = bar_index - vp_lookback
+    int end_bar = bar_index + 10
+
+    line_vah := line.new(start_bar, vp_vah, end_bar, vp_vah, color=color.red, width=2)
+    line_poc := line.new(start_bar, vp_poc, end_bar, vp_poc, color=color.yellow, width=3)
+    line_val := line.new(start_bar, vp_val, end_bar, vp_val, color=color.green, width=2)
+
+    va_box := box.new(start_bar, vp_vah, end_bar, vp_val, bgcolor=color.new(color.blue, 92), border_color=color.new(color.blue, 70))
+
+    lbl_vah := label.new(end_bar + 2, vp_vah, "VAH", color=color.new(color.red, 50), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+    lbl_poc := label.new(end_bar + 2, vp_poc, "POC", color=color.new(color.yellow, 30), textcolor=color.black, style=label.style_label_left, size=size.tiny)
+    lbl_val := label.new(end_bar + 2, vp_val, "VAL", color=color.new(color.green, 50), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+
+// ============================================================
+// REJECTION DETECTION (VAL/POC)
+// ============================================================
+body = math.abs(close - open)
+lower_wick = math.min(close, open) - low
+is_bullish = close > open
+wick_ratio = body > 0 ? lower_wick / body : 0
+
+near_poc = not na(vp_poc) and math.abs(low - vp_poc) / vp_poc * 100 < rej_tolerance
+near_val = not na(vp_val) and math.abs(low - vp_val) / vp_val * 100 < rej_tolerance
+at_support = near_poc or near_val
+
+is_rejection = in_zone and body > 0 and lower_wick > body * rej_wick_ratio and is_bullish and at_support
+
+// Determine rejection type
+is_val_rejection = is_rejection and near_val
+is_poc_rejection = is_rejection and near_poc and not near_val
+
+// Small triangle marker below rejection candle (not blocking)
+plotshape(is_val_rejection, title="VAL Rejection", location=location.belowbar, style=shape.triangleup, color=color.green, size=size.tiny)
+plotshape(is_poc_rejection, title="POC Rejection", location=location.belowbar, style=shape.triangleup, color=color.yellow, size=size.tiny)
+
+// Draw small horizontal line at rejection price (the low)
+var line rej_price_line = na
+var label rej_price_label = na
+
+if is_rejection
+    line.delete(rej_price_line[1])
+    label.delete(rej_price_label[1])
+    // Short line at the rejection low
+    rej_price_line := line.new(bar_index - 2, low, bar_index + 2, low, color=color.purple, width=1, style=line.style_dotted)
+    // Small label with price (offset to the left, not on candle)
+    rej_price_label := label.new(bar_index - 3, low, str.tostring(low, "#.####"), color=color.new(color.purple, 90), textcolor=color.purple, style=label.style_label_right, size=size.tiny)
+
+// ============================================================
+// PULLBACK DETECTION
+// ============================================================
+was_above_poc = ta.highest(close, 10) > vp_poc * 1.02
+now_at_poc = not na(vp_poc) and math.abs(close - vp_poc) / vp_poc * 100 < 3
+is_pullback = in_zone and was_above_poc and now_at_poc and close > open
+
+// Pullback with rejection (long lower wick)
+pullback_has_rejection = is_pullback and lower_wick > body * 1.0
+
+// Small marker for pullback (not blocking chart)
+plotshape(is_pullback and not is_rejection and not pullback_has_rejection, title="Pullback", location=location.belowbar, style=shape.circle, color=color.new(color.blue, 30), size=size.tiny)
+
+// Pullback WITH rejection - more important
+plotshape(pullback_has_rejection and not is_rejection, title="Pullback Reject", location=location.belowbar, style=shape.diamond, color=color.new(color.aqua, 0), size=size.tiny)
+
+// Draw rejection price for pullback
+var line pb_rej_line = na
+var label pb_rej_label = na
+
+if pullback_has_rejection and not is_rejection
+    line.delete(pb_rej_line[1])
+    label.delete(pb_rej_label[1])
+    // Short line at pullback rejection low
+    pb_rej_line := line.new(bar_index - 2, low, bar_index + 2, low, color=color.aqua, width=1, style=line.style_dotted)
+    // Small label with rejected price
+    pb_rej_label := label.new(bar_index + 3, low, "PB " + str.tostring(low, "#.####"), color=color.new(color.aqua, 90), textcolor=color.aqua, style=label.style_label_left, size=size.tiny)
+
+// ============================================================
+// PEAK DETECTION
+// ============================================================
+var label peak_label = na
+var line peak_to_support = na
+
+if in_zone and barstate.islast
+    float max_high = 0.0
+    int max_bar = bar_index
+    for i = 0 to vp_lookback - 1
+        if high[i] > max_high and high[i] > vp_vah
+            max_high := high[i]
+            max_bar := bar_index - i
+
+    float min_low = 999999.0
+    int min_bar = bar_index
+    if max_bar < bar_index
+        for i = 0 to (bar_index - max_bar - 1)
+            if low[i] < min_low and low[i] < vp_poc * 1.05
+                min_low := low[i]
+                min_bar := bar_index - i
+
+    label.delete(peak_label)
+    line.delete(peak_to_support)
+
+    if max_high > 0
+        peak_label := label.new(max_bar, max_high, "PEAK " + str.tostring(max_high, "#.####"), color=color.new(color.red, 30), textcolor=color.white, style=label.style_label_down, size=size.small)
+
+        if min_low < 999999.0
+            peak_to_support := line.new(max_bar, max_high * 0.99, min_bar, min_low * 1.01, color=color.orange, width=3, style=line.style_arrow_right)
+
+// ============================================================
+// ENTRY MARKER
+// ============================================================
+var label entry_label = na
+var line entry_line = na
+var label entry_date_label = na
+
+if show_entry_marker and barstate.islast
+    label.delete(entry_label)
+    line.delete(entry_line)
+    label.delete(entry_date_label)
+
+    for i = 0 to 200
+        if math.abs(time[i] - entry_date) < 4 * 60 * 60 * 1000
+            // Entry price label (above)
+            entry_label := label.new(bar_index - i, entry_price * 1.01, "ENTRY " + str.tostring(entry_price, "#.####"), color=color.new(color.blue, 20), textcolor=color.white, style=label.style_label_up, size=size.small)
+            // Entry line
+            entry_line := line.new(bar_index - i - 5, entry_price, bar_index - i + 5, entry_price, color=color.blue, width=2, style=line.style_solid)
+            // Date label (below, small)
+            string dt_str = str.format("{0,date,MM-dd HH:mm}", entry_date)
+            entry_date_label := label.new(bar_index - i, entry_price * 0.99, dt_str, color=color.new(color.blue, 70), textcolor=color.aqua, style=label.style_label_down, size=size.tiny)
+            break
+
+// ============================================================
+// POC VAL RETEST MARKERS
+// ============================================================
+poc_touch = not na(vp_poc) and low <= vp_poc * 1.02 and low >= vp_poc * 0.98
+plotshape(in_zone and poc_touch, title="POC Touch", location=location.belowbar, style=shape.diamond, color=color.yellow, size=size.tiny)
+
+val_touch = not na(vp_val) and low <= vp_val * 1.02 and low >= vp_val * 0.98
+plotshape(in_zone and val_touch and not poc_touch, title="VAL Touch", location=location.belowbar, style=shape.diamond, color=color.green, size=size.tiny)
+
+// ============================================================
+// TL BREAK MARKER
+// ============================================================
+tl_break = not na(tl_current_price) and close > tl_current_price and close[1] <= tl_current_price[1]
+plotshape(in_zone and tl_break, title="TL Break", location=location.abovebar, style=shape.flag, color=color.lime, size=size.small)
+
+// ============================================================
+// INFO TABLE
+// ============================================================
+var table info = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 80))
+
+if barstate.islast and in_zone
+    table.cell(info, 0, 0, "VP RETEST", bgcolor=color.blue, text_color=color.white, text_size=size.small)
+    table.merge_cells(info, 0, 0, 1, 0)
+
+    table.cell(info, 0, 1, "VAH", text_color=color.red, text_size=size.tiny)
+    table.cell(info, 1, 1, str.tostring(vp_vah, "#.#####"), text_color=color.white, text_size=size.tiny)
+
+    table.cell(info, 0, 2, "POC", text_color=color.yellow, text_size=size.tiny)
+    table.cell(info, 1, 2, str.tostring(vp_poc, "#.#####"), text_color=color.white, text_size=size.tiny)
+
+    table.cell(info, 0, 3, "VAL", text_color=color.green, text_size=size.tiny)
+    table.cell(info, 1, 3, str.tostring(vp_val, "#.#####"), text_color=color.white, text_size=size.tiny)
+
+    table.cell(info, 0, 4, "Entry", text_color=color.blue, text_size=size.tiny)
+    table.cell(info, 1, 4, str.tostring(entry_price, "#.#####"), text_color=color.white, text_size=size.tiny)
+
+    // Entry Date and Time
+    string entry_dt = str.format("{0,date,MM-dd HH:mm}", entry_date)
+    table.cell(info, 0, 5, "Date", text_color=color.blue, text_size=size.tiny)
+    table.cell(info, 1, 5, entry_dt, text_color=color.aqua, text_size=size.tiny)
+
+    float dist = not na(vp_poc) ? (close - vp_poc) / vp_poc * 100 : 0
+    table.cell(info, 0, 6, "Dist POC", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 6, str.tostring(dist, "#.#") + "%", text_color=dist > 0 ? color.green : color.red, text_size=size.tiny)
+
+    string pos = close > vp_vah ? "ABOVE VAH" : close > vp_poc ? "IN VA UP" : close > vp_val ? "IN VA DN" : "BELOW VAL"
+    table.cell(info, 0, 7, "Position", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 7, pos, text_color=color.white, text_size=size.tiny)
+
+    // Legend
+    table.cell(info, 0, 8, "Legend", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 8, "Box=Reject TL=Trend", text_color=color.purple, text_size=size.tiny)
+
+// ============================================================
+// ZONE BACKGROUND
+// ============================================================
+bgcolor(use_zone and in_zone ? color.new(color.teal, 95) : na)
+
+// ============================================================
+// ANNOTATIONS - Fleches et Explications (a droite du chart)
+// ============================================================
+grp_annot = "Annotations"
+show_annotations = input.bool(true, "Afficher Annotations", group=grp_annot)
+annot_offset = input.int(25, "Distance Annotations", minval=10, maxval=100, group=grp_annot)
+
+var line arr_vah = na
+var line arr_poc = na
+var line arr_val = na
+var line arr_entry = na
+var line arr_peak = na
+var line arr_reject = na
+
+var label txt_vah = na
+var label txt_poc = na
+var label txt_val = na
+var label txt_entry = na
+var label txt_peak = na
+var label txt_journey = na
+
+if show_annotations and in_zone and barstate.islast
+    // Delete old annotations
+    line.delete(arr_vah)
+    line.delete(arr_poc)
+    line.delete(arr_val)
+    line.delete(arr_entry)
+    line.delete(arr_peak)
+    line.delete(arr_reject)
+    label.delete(txt_vah)
+    label.delete(txt_poc)
+    label.delete(txt_val)
+    label.delete(txt_entry)
+    label.delete(txt_peak)
+    label.delete(txt_journey)
+
+    int right_pos = bar_index + annot_offset
+    int arrow_start = bar_index + annot_offset - 5
+
+    // VAH Annotation
+    arr_vah := line.new(arrow_start, vp_vah, bar_index + 5, vp_vah, color=color.red, width=1, style=line.style_arrow_left)
+    txt_vah := label.new(right_pos, vp_vah, "RESISTANCE\nVAH Zone\nRejection attendue", color=color.new(color.red, 80), textcolor=color.red, style=label.style_label_left, size=size.tiny, textalign=text.align_left)
+
+    // POC Annotation
+    arr_poc := line.new(arrow_start, vp_poc, bar_index + 5, vp_poc, color=color.yellow, width=1, style=line.style_arrow_left)
+    txt_poc := label.new(right_pos, vp_poc, "POC\nPoint de Controle\nZone fort volume", color=color.new(color.yellow, 80), textcolor=color.orange, style=label.style_label_left, size=size.tiny, textalign=text.align_left)
+
+    // VAL Annotation
+    arr_val := line.new(arrow_start, vp_val, bar_index + 5, vp_val, color=color.green, width=1, style=line.style_arrow_left)
+    txt_val := label.new(right_pos, vp_val, "SUPPORT\nVAL Zone\nBounce attendu", color=color.new(color.green, 80), textcolor=color.green, style=label.style_label_left, size=size.tiny, textalign=text.align_left)
+
+    // Entry Annotation
+    arr_entry := line.new(arrow_start, entry_price, bar_index + 5, entry_price, color=color.blue, width=1, style=line.style_arrow_left)
+    txt_entry := label.new(right_pos, entry_price, "ENTRY\nApres rejection\nau support VP", color=color.new(color.blue, 80), textcolor=color.blue, style=label.style_label_left, size=size.tiny, textalign=text.align_left)
+
+    // Journey Explanation (above chart)
+    float top_price = vp_vah * 1.05
+    txt_journey := label.new(bar_index - vp_lookback/2, top_price, "PARCOURS: Peak VAH -> Descente -> Support POC/VAL -> Rejection -> ENTRY", color=color.new(color.white, 70), textcolor=color.white, style=label.style_label_down, size=size.small)

@@ -1,0 +1,268 @@
+//@version=5
+indicator("1INCHUSDT Trade Analysis - 25/02/2026", overlay=true, max_lines_count=500, max_labels_count=100, max_boxes_count=100)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRADE PARAMETERS - 1INCHUSDT
+// ═══════════════════════════════════════════════════════════════════════════════
+// Alert: 25/02/2026 01:00 (1H)
+// Entry: 0.090681
+// SL (Box Low): 0.086922
+// TP1 (+15%): 0.104283
+// Result: -4.15% (SL Hit on 28/02/2026)
+
+alertTime   = timestamp(2026, 2, 25, 1, 0, 0)
+entryPrice  = 0.090681
+slPrice     = 0.086922
+tp1Price    = 0.104283
+tp2Price    = 0.136021
+bePrice     = entryPrice * 1.10  // BE activation at +10%
+maxReached  = 0.098800           // Max price reached (+8.9%)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DISPLAY OPTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+grpDisplay = "Display"
+showVP          = input.bool(true, "Show Volume Profile", group=grpDisplay)
+showTradeLevels = input.bool(true, "Show Trade Levels", group=grpDisplay)
+showMegaBuy     = input.bool(true, "Show MEGA BUY Signal", group=grpDisplay)
+vpBars          = input.int(50, "VP Lookback Bars", minval=10, maxval=200, group=grpDisplay)
+vpRows          = input.int(24, "VP Rows", minval=10, maxval=50, group=grpDisplay)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VOLUME PROFILE (Fixed Range - Not Extended Left)
+// ═══════════════════════════════════════════════════════════════════════════════
+var float[] vpVolumes = array.new_float(vpRows, 0.0)
+var float vpHigh = na
+var float vpLow = na
+var float vpPOC = na
+var float vpVAH = na
+var float vpVAL = na
+var int vpStartBar = na
+
+// VP starts exactly at alert time
+isAlertBar = time == alertTime
+
+if isAlertBar
+    vpStartBar := bar_index
+
+// Calculate VP from alert bar forward (for analysis of what happened after)
+// Or calculate VP from X bars before alert (to see the context)
+vpLookbackStart = bar_index - vpBars
+
+if bar_index >= vpLookbackStart and time <= alertTime
+    if na(vpHigh) or high > vpHigh
+        vpHigh := high
+    if na(vpLow) or low < vpLow
+        vpLow := low
+
+// Build VP histogram
+if not na(vpHigh) and not na(vpLow) and time == alertTime
+    rowHeight = (vpHigh - vpLow) / vpRows
+
+    for i = 0 to vpBars - 1
+        idx = bar_index - i
+        if idx >= 0
+            h = high[i]
+            l = low[i]
+            v = volume[i]
+
+            for row = 0 to vpRows - 1
+                rowLow = vpLow + row * rowHeight
+                rowHigh = rowLow + rowHeight
+
+                // Check if candle overlaps this row
+                if h >= rowLow and l <= rowHigh
+                    overlap = math.min(h, rowHigh) - math.max(l, rowLow)
+                    candleRange = h - l
+                    if candleRange > 0
+                        portion = overlap / candleRange
+                        array.set(vpVolumes, row, array.get(vpVolumes, row) + v * portion)
+
+// Find POC, VAH, VAL
+var float pocPrice = na
+var float vahPrice = na
+var float valPrice = na
+
+if time == alertTime and not na(vpHigh) and not na(vpLow)
+    rowHeight = (vpHigh - vpLow) / vpRows
+    maxVol = 0.0
+    pocRow = 0
+    totalVol = 0.0
+
+    for row = 0 to vpRows - 1
+        vol = array.get(vpVolumes, row)
+        totalVol += vol
+        if vol > maxVol
+            maxVol := vol
+            pocRow := row
+
+    pocPrice := vpLow + (pocRow + 0.5) * rowHeight
+
+    // Value Area (70% of volume)
+    targetVol = totalVol * 0.70
+    cumVol = array.get(vpVolumes, pocRow)
+    upperRow = pocRow
+    lowerRow = pocRow
+
+    while cumVol < targetVol and (upperRow < vpRows - 1 or lowerRow > 0)
+        upperVol = upperRow < vpRows - 1 ? array.get(vpVolumes, upperRow + 1) : 0
+        lowerVol = lowerRow > 0 ? array.get(vpVolumes, lowerRow - 1) : 0
+
+        if upperVol >= lowerVol and upperRow < vpRows - 1
+            upperRow += 1
+            cumVol += upperVol
+        else if lowerRow > 0
+            lowerRow -= 1
+            cumVol += lowerVol
+        else
+            break
+
+    vahPrice := vpLow + (upperRow + 1) * rowHeight
+    valPrice := vpLow + lowerRow * rowHeight
+
+// Draw VP boxes
+if showVP and time == alertTime and not na(vpHigh) and not na(vpLow)
+    rowHeight = (vpHigh - vpLow) / vpRows
+    maxVol = 0.0
+
+    for row = 0 to vpRows - 1
+        if array.get(vpVolumes, row) > maxVol
+            maxVol := array.get(vpVolumes, row)
+
+    if maxVol > 0
+        for row = 0 to vpRows - 1
+            vol = array.get(vpVolumes, row)
+            width = math.round(vol / maxVol * 30)  // Max 30 bars width
+            rowLow = vpLow + row * rowHeight
+            rowHigh = rowLow + rowHeight
+
+            isPOC = row == math.round((pocPrice - vpLow) / rowHeight - 0.5)
+            boxColor = isPOC ? color.new(color.yellow, 60) : color.new(color.blue, 75)
+
+            if width > 0
+                box.new(bar_index - width, rowHigh, bar_index, rowLow,
+                       border_color=color.new(boxColor, 50),
+                       bgcolor=boxColor)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRADE LEVELS (Clean - Small Markers)
+// ═══════════════════════════════════════════════════════════════════════════════
+if showTradeLevels and time == alertTime
+    // Entry vertical line
+    line.new(bar_index, low * 0.98, bar_index, high * 1.02,
+             color=color.white, width=1, style=line.style_dotted)
+
+    // Entry horizontal line
+    line.new(bar_index, entryPrice, bar_index + 100, entryPrice,
+             color=color.white, width=1, style=line.style_solid)
+
+    // SL line (red)
+    line.new(bar_index, slPrice, bar_index + 100, slPrice,
+             color=color.red, width=1, style=line.style_dashed)
+
+    // TP1 line (green)
+    line.new(bar_index, tp1Price, bar_index + 100, tp1Price,
+             color=color.green, width=1, style=line.style_dashed)
+
+    // BE activation line (orange) - +10%
+    line.new(bar_index, bePrice, bar_index + 100, bePrice,
+             color=color.orange, width=1, style=line.style_dotted)
+
+    // Max reached line (aqua) - +8.9%
+    line.new(bar_index, maxReached, bar_index + 100, maxReached,
+             color=color.aqua, width=2, style=line.style_solid)
+
+    // Small labels on the right (tiny, no text clutter)
+    label.new(bar_index + 102, entryPrice, "E",
+              style=label.style_label_left, color=color.white,
+              textcolor=color.black, size=size.tiny)
+    label.new(bar_index + 102, slPrice, "SL",
+              style=label.style_label_left, color=color.red,
+              textcolor=color.white, size=size.tiny)
+    label.new(bar_index + 102, tp1Price, "TP1",
+              style=label.style_label_left, color=color.green,
+              textcolor=color.white, size=size.tiny)
+    label.new(bar_index + 102, bePrice, "BE+10%",
+              style=label.style_label_left, color=color.orange,
+              textcolor=color.white, size=size.tiny)
+    label.new(bar_index + 102, maxReached, "MAX+8.9%",
+              style=label.style_label_left, color=color.aqua,
+              textcolor=color.black, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MEGA BUY SIGNAL MARKER (Small Arrow)
+// ═══════════════════════════════════════════════════════════════════════════════
+if showMegaBuy and time == alertTime
+    // Small triangle below the candle
+    label.new(bar_index, low * 0.998, "MB",
+              style=label.style_triangleup,
+              color=color.lime,
+              textcolor=color.lime,
+              size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VP LEVELS (POC, VAH, VAL)
+// ═══════════════════════════════════════════════════════════════════════════════
+if showVP and not na(pocPrice) and barstate.islast
+    // POC line
+    line.new(bar_index - vpBars, pocPrice, bar_index, pocPrice,
+             color=color.yellow, width=2, style=line.style_solid)
+    label.new(bar_index - vpBars - 5, pocPrice, "POC",
+              style=label.style_label_right, color=color.yellow,
+              textcolor=color.black, size=size.tiny)
+
+    // VAH line
+    if not na(vahPrice)
+        line.new(bar_index - vpBars, vahPrice, bar_index, vahPrice,
+                 color=color.green, width=1, style=line.style_dashed)
+        label.new(bar_index - vpBars - 5, vahPrice, "VAH",
+                  style=label.style_label_right, color=color.green,
+                  textcolor=color.white, size=size.tiny)
+
+    // VAL line
+    if not na(valPrice)
+        line.new(bar_index - vpBars, valPrice, bar_index, valPrice,
+                 color=color.red, width=1, style=line.style_dashed)
+        label.new(bar_index - vpBars - 5, valPrice, "VAL",
+                  style=label.style_label_right, color=color.red,
+                  textcolor=color.white, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HIGHLIGHT SL HIT CANDLE
+// ═══════════════════════════════════════════════════════════════════════════════
+slHitTime = timestamp(2026, 2, 28, 6, 0, 0)
+
+if time == slHitTime
+    // Red X marker
+    label.new(bar_index, high * 1.005, "X",
+              style=label.style_label_down,
+              color=color.red,
+              textcolor=color.white,
+              size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INFO TABLE (Small, Corner)
+// ═══════════════════════════════════════════════════════════════════════════════
+var table infoTable = table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 80), border_width=1)
+
+if barstate.islast
+    table.cell(infoTable, 0, 0, "1INCHUSDT", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, "Trade Analysis", text_color=color.gray, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 1, "Entry", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 1, str.tostring(entryPrice), text_color=color.white, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 2, "SL", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 2, str.tostring(slPrice) + " (-4.15%)", text_color=color.red, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 3, "Max", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 3, str.tostring(maxReached) + " (+8.9%)", text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 4, "BE Req", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 4, str.tostring(bePrice, "#.######") + " (+10%)", text_color=color.orange, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 5, "Gap", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 5, "-1.1% (missed BE)", text_color=color.orange, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 6, "Result", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 6, "-4.15% (SL Hit)", text_color=color.red, text_size=size.tiny)
