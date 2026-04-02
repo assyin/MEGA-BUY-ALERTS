@@ -253,7 +253,8 @@ class V5ConditionChecker:
 
     async def check_prerequisites(
         self,
-        alert: Dict[str, Any]
+        alert: Dict[str, Any],
+        skip_stc: bool = False
     ) -> Tuple[bool, Optional[str], Optional[float]]:
         """
         Check V5 prerequisites before adding to watchlist.
@@ -265,6 +266,8 @@ class V5ConditionChecker:
 
         Args:
             alert: Alert data
+            skip_stc: If True, skip STC check (for historical alerts where
+                      current STC no longer reflects the alert-time state)
 
         Returns:
             Tuple of (passes, rejection_reason, trendline_price)
@@ -289,18 +292,21 @@ class V5ConditionChecker:
                 return (False, "REJECTED_NO_TL", None)
 
             # Check STC oversold (simplified - check 1h)
-            klines_1h = await self.binance_client.get_klines(pair, "1h", 60)
-            closes = [k["close"] for k in klines_1h]
-            stc = TechnicalIndicators.calculate_stc(closes)
+            if not skip_stc:
+                klines_1h = await self.binance_client.get_klines(pair, "1h", 60)
+                closes = [k["close"] for k in klines_1h]
+                stc = TechnicalIndicators.calculate_stc(closes)
 
-            if stc is None or stc >= 0.2:
-                # Also check 30m
-                klines_30m = await self.binance_client.get_klines(pair, "30m", 60)
-                closes_30m = [k["close"] for k in klines_30m]
-                stc_30m = TechnicalIndicators.calculate_stc(closes_30m)
+                if stc is None or stc >= 0.2:
+                    # Also check 30m
+                    klines_30m = await self.binance_client.get_klines(pair, "30m", 60)
+                    closes_30m = [k["close"] for k in klines_30m]
+                    stc_30m = TechnicalIndicators.calculate_stc(closes_30m)
 
-                if stc_30m is None or stc_30m >= 0.2:
-                    return (False, "REJECTED_STC", None)
+                    if stc_30m is None or stc_30m >= 0.2:
+                        return (False, "REJECTED_STC", None)
+            else:
+                logger.info(f"V5: STC check skipped for {pair} (historical alert)")
 
             return (True, None, trendline_price)
 

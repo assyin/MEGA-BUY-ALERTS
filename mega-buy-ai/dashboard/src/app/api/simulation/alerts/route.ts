@@ -18,7 +18,7 @@ const supabase = createClient(
  */
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
-  const limit = parseInt(searchParams.get('limit') || '100')
+  const limit = parseInt(searchParams.get('limit') || '500')
   const since = searchParams.get('since')
   const lastId = searchParams.get('last_id')
 

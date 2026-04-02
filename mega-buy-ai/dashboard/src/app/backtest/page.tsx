@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, lazy, Suspense } from "react"
 import {
   FlaskConical,
   Play,
@@ -39,6 +39,8 @@ import {
   Trophy,
   Skull
 } from "lucide-react"
+
+const BacktestStatsCharts = lazy(() => import("@/components/BacktestStatsCharts"))
 
 // Helper function to generate TradingView PineScript code for Foreign Candle Order Block visualization
 function generateFcObPineScript(
@@ -1498,7 +1500,7 @@ function groupTradesByEntry(trades: Trade[]): GroupedTrade[] {
   }
 
   const result: GroupedTrade[] = []
-  for (const [, groupTrades] of groups) {
+  for (const [, groupTrades] of Array.from(groups)) {
     // Sort by timeframe (15m < 30m < 1h < 4h)
     const tfOrder = { '15m': 1, '30m': 2, '1h': 3, '4h': 4 }
     groupTrades.sort((a, b) => (tfOrder[a.timeframe as keyof typeof tfOrder] || 5) - (tfOrder[b.timeframe as keyof typeof tfOrder] || 5))
@@ -5700,6 +5702,68 @@ function TradeDetailModal({
   )
 }
 
+function AutoBacktestStatus() {
+  const [status, setStatus] = useState<any>(null)
+  const [running, setRunning] = useState<any[]>([])
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch('http://localhost:8002/backtest/auto/status')
+        if (res.ok) setStatus(await res.json())
+      } catch {}
+      try {
+        const res = await fetch('http://localhost:9001/api/running-backtests')
+        if (res.ok) setRunning(await res.json())
+      } catch {}
+    }
+    load()
+    const interval = setInterval(load, 10000)
+    return () => clearInterval(interval)
+  }, [])
+
+  if (!status || !status.running) return null
+
+  const stats = status.db_stats || {}
+  const progress = stats.total_symbols || 0
+  const total = 300
+  const pct = Math.min(100, Math.round(progress / total * 100))
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+          <span className="text-sm font-semibold text-white">Auto-Backtest (OpenClaw)</span>
+          <span className="text-xs text-gray-500">V5 | {status.backtest_days}j | Vol&gt;${(status.min_volume/1000).toFixed(0)}K</span>
+        </div>
+        <span className="text-xs text-gray-400">
+          {stats.total_backtests || 0} backtests | {stats.total_symbols || 0} paires | {stats.total_trades || 0} trades
+        </span>
+      </div>
+      <div className="w-full bg-gray-800 rounded-full h-2.5 mb-2">
+        <div className="bg-green-500 h-2.5 rounded-full transition-all duration-500" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="flex items-center justify-between text-xs text-gray-500">
+        <span>{pct}% ({progress}/{total} paires)</span>
+        <span>WR: {stats.win_rate_c?.toFixed(0) || 0}% | Avg P&L: {stats.avg_pnl_c?.toFixed(1) || 0}%</span>
+      </div>
+      {running.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          {running.map((r: any) => (
+            <div key={r.task_id} className="flex items-center gap-2 bg-blue-900/20 border border-blue-800/30 rounded-lg px-3 py-2">
+              <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+              <span className="font-mono font-bold text-blue-300 text-sm">{r.symbol}</span>
+              <span className="text-xs text-blue-400/70">{r.progress}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 interface RunningBacktest {
   id: string
   symbol: string
@@ -5717,12 +5781,13 @@ export default function BacktestPage() {
   const [loadingDetails, setLoadingDetails] = useState(false)
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null)
   const [selectedTrade, setSelectedTrade] = useState<GroupedTrade | null>(null)
+  const [activeMainTab, setActiveMainTab] = useState<"resultats" | "statistiques">("resultats")
 
   // Form state
   const [symbol, setSymbol] = useState("ENSOUSDT")
   const [startDate, setStartDate] = useState("2026-02-01")
   const [endDate, setEndDate] = useState("2026-02-28")
-  const [strategyVersion, setStrategyVersion] = useState<"v1" | "v2" | "v3" | "v4" | "v5">("v5")
+  const [strategyVersion, setStrategyVersion] = useState<string>("v5")
 
   // Advanced Filters State
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
@@ -6123,6 +6188,40 @@ export default function BacktestPage() {
         </button>
       </div>
 
+      {/* Main Tabs */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setActiveMainTab("resultats")}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors border ${
+            activeMainTab === "resultats"
+              ? "bg-purple-500/20 border-purple-500/40 text-purple-300"
+              : "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700"
+          }`}
+        >
+          Resultats
+        </button>
+        <button
+          onClick={() => setActiveMainTab("statistiques")}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors border ${
+            activeMainTab === "statistiques"
+              ? "bg-purple-500/20 border-purple-500/40 text-purple-300"
+              : "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700"
+          }`}
+        >
+          Statistiques
+        </button>
+      </div>
+
+      {/* Statistiques Tab */}
+      {activeMainTab === "statistiques" && (
+        <Suspense fallback={<div className="flex items-center justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500" /></div>}>
+          <BacktestStatsCharts backtests={backtests as any} />
+        </Suspense>
+      )}
+
+      {/* Resultats Tab */}
+      {activeMainTab === "resultats" && <>
+
       {/* New Backtest Form */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
         <h2 className="text-lg font-semibold text-white mb-4">Run New Backtest</h2>
@@ -6269,6 +6368,9 @@ export default function BacktestPage() {
           </div>
         )}
       </div>
+
+      {/* Auto-Backtest Status (OpenClaw) */}
+      <AutoBacktestStatus />
 
       {/* Advanced Filters Panel */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
@@ -6849,8 +6951,19 @@ export default function BacktestPage() {
                             </span>
                           )}
                         </div>
-                        <div className="text-sm text-gray-400">
+                        <div className="text-sm text-gray-400 flex items-center gap-2">
                           {formatDate(bt.start_date)} - {formatDate(bt.end_date)}
+                          <span className="text-gray-600">|</span>
+                          <span className="text-xs text-gray-500" title={bt.created_at}>
+                            Lancé: {new Date(bt.created_at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' })}
+                          </span>
+                          <span className={`px-1.5 py-0.5 text-[10px] rounded-full ${
+                            bt.total_alerts > 0
+                              ? 'bg-green-500/20 text-green-400'
+                              : 'bg-gray-500/20 text-gray-400'
+                          }`}>
+                            {bt.total_alerts > 0 ? `Terminé (${bt.total_alerts} alerts, ${bt.total_trades} trades)` : '0 signaux détectés'}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -7151,6 +7264,7 @@ export default function BacktestPage() {
           </div>
         )}
       </div>
+      </>}
     </div>
   )
 }

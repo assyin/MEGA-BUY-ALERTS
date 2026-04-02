@@ -167,8 +167,8 @@ interface SimulationConfig {
   portfolios: Record<string, PortfolioConfigData>;
 }
 
-// API Base URL
-const API_BASE = 'http://localhost:8001';
+// API Base URL - use Next.js proxy to avoid CORS issues when accessed remotely
+const API_BASE = '/api/simulation/proxy';
 
 // Helper functions
 const formatCurrency = (value: number) => {
@@ -198,6 +198,23 @@ export default function SimulationPage() {
   const [positionFilter, setPositionFilter] = useState<'all' | 'live' | 'backtest'>('all');
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'flat' | 'grouped'>('grouped');
+
+  // Calculate per-portfolio stats from open positions
+  const portfolioOpenStats = React.useMemo(() => {
+    const stats: Record<string, { allocated: number; wins: number; losses: number; count: number }> = {};
+    for (const pos of positions) {
+      if (pos.status !== 'OPEN') continue;
+      if (!stats[pos.portfolio_id]) {
+        stats[pos.portfolio_id] = { allocated: 0, wins: 0, losses: 0, count: 0 };
+      }
+      const s = stats[pos.portfolio_id];
+      s.allocated += pos.allocated_capital || 0;
+      s.count += 1;
+      if (pos.current_pnl_pct > 0) s.wins += 1;
+      else if (pos.current_pnl_pct < 0) s.losses += 1;
+    }
+    return stats;
+  }, [positions]);
 
   // Fetch data
   const fetchData = useCallback(async () => {
@@ -501,7 +518,7 @@ export default function SimulationPage() {
               </div>
             </div>
             <p className="text-gray-500 text-sm mt-1">
-              Last update: {overview?.timestamp ? new Date(overview.timestamp).toLocaleTimeString() : 'N/A'}
+              Last update: {overview?.timestamp ? new Date(overview.timestamp).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris' }) : 'N/A'}
             </p>
           </div>
           <div className="flex flex-col gap-2">
@@ -677,8 +694,11 @@ export default function SimulationPage() {
                       <tr>
                         <th className="px-4 py-3 text-left">Portfolio</th>
                         <th className="px-4 py-3 text-right">Balance</th>
+                        <th className="px-4 py-3 text-right">Libre</th>
+                        <th className="px-4 py-3 text-right">En Position</th>
                         <th className="px-4 py-3 text-right">Return</th>
-                        <th className="px-4 py-3 text-right">Win Rate</th>
+                        <th className="px-4 py-3 text-right">WR Closed</th>
+                        <th className="px-4 py-3 text-right">WR Open</th>
                         <th className="px-4 py-3 text-right">P.F.</th>
                         <th className="px-4 py-3 text-right">Trades</th>
                         <th className="px-4 py-3 text-right">Open</th>
@@ -686,23 +706,33 @@ export default function SimulationPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {overview.live.portfolios.map((p) => (
+                      {overview.live.portfolios.map((p) => {
+                        const stats = portfolioOpenStats[p.id] || { allocated: 0, wins: 0, losses: 0, count: 0 };
+                        const freeBalance = p.balance - stats.allocated;
+                        const openWR = stats.count > 0 ? (stats.wins / stats.count * 100) : 0;
+                        return (
                         <tr key={p.id} className="border-t border-gray-700 hover:bg-gray-700/50">
                           <td className="px-4 py-3">
                             <div className="font-medium">{p.name}</div>
                             <div className="text-xs text-gray-400">{p.type}</div>
                           </td>
                           <td className="px-4 py-3 text-right">{formatCurrency(p.balance)}</td>
+                          <td className="px-4 py-3 text-right text-blue-400">{formatCurrency(freeBalance)}</td>
+                          <td className="px-4 py-3 text-right text-yellow-400">{formatCurrency(stats.allocated)}</td>
                           <td className={`px-4 py-3 text-right ${p.return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                             {formatPercent(p.return_pct)}
                           </td>
                           <td className="px-4 py-3 text-right">{p.win_rate.toFixed(1)}%</td>
+                          <td className={`px-4 py-3 text-right ${openWR >= 50 ? 'text-green-400' : openWR > 0 ? 'text-yellow-400' : 'text-gray-400'}`}>
+                            {stats.count > 0 ? `${openWR.toFixed(0)}%` : '-'}
+                          </td>
                           <td className="px-4 py-3 text-right">{p.profit_factor.toFixed(2)}</td>
                           <td className="px-4 py-3 text-right">{p.total_trades}</td>
                           <td className="px-4 py-3 text-right">{p.open_positions}</td>
                           <td className="px-4 py-3 text-right text-red-400">-{p.max_drawdown_pct.toFixed(1)}%</td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -727,8 +757,11 @@ export default function SimulationPage() {
                       <tr>
                         <th className="px-4 py-3 text-left">Portfolio</th>
                         <th className="px-4 py-3 text-right">Balance</th>
+                        <th className="px-4 py-3 text-right">Libre</th>
+                        <th className="px-4 py-3 text-right">En Position</th>
                         <th className="px-4 py-3 text-right">Return</th>
-                        <th className="px-4 py-3 text-right">Win Rate</th>
+                        <th className="px-4 py-3 text-right">WR Closed</th>
+                        <th className="px-4 py-3 text-right">WR Open</th>
                         <th className="px-4 py-3 text-right">P.F.</th>
                         <th className="px-4 py-3 text-right">Trades</th>
                         <th className="px-4 py-3 text-right">Open</th>
@@ -736,7 +769,11 @@ export default function SimulationPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {overview.backtest.portfolios.map((p) => (
+                      {overview.backtest.portfolios.map((p) => {
+                        const stats = portfolioOpenStats[p.id] || { allocated: 0, wins: 0, losses: 0, count: 0 };
+                        const freeBalance = p.balance - stats.allocated;
+                        const openWR = stats.count > 0 ? (stats.wins / stats.count * 100) : 0;
+                        return (
                         <tr key={p.id} className={`border-t border-gray-700 hover:bg-gray-700/50 ${p.live_only ? 'opacity-50' : ''}`}>
                           <td className="px-4 py-3">
                             <div className="font-medium">{p.name}</div>
@@ -746,16 +783,21 @@ export default function SimulationPage() {
                             </div>
                           </td>
                           {p.live_only ? (
-                            <td colSpan={7} className="px-4 py-3 text-center text-gray-500 italic">
+                            <td colSpan={10} className="px-4 py-3 text-center text-gray-500 italic">
                               N/A - V5 requires real-time monitoring
                             </td>
                           ) : (
                             <>
                               <td className="px-4 py-3 text-right">{formatCurrency(p.balance)}</td>
+                              <td className="px-4 py-3 text-right text-blue-400">{formatCurrency(freeBalance)}</td>
+                              <td className="px-4 py-3 text-right text-yellow-400">{formatCurrency(stats.allocated)}</td>
                               <td className={`px-4 py-3 text-right ${p.return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                                 {formatPercent(p.return_pct)}
                               </td>
                               <td className="px-4 py-3 text-right">{p.win_rate.toFixed(1)}%</td>
+                              <td className={`px-4 py-3 text-right ${openWR >= 50 ? 'text-green-400' : openWR > 0 ? 'text-yellow-400' : 'text-gray-400'}`}>
+                                {stats.count > 0 ? `${openWR.toFixed(0)}%` : '-'}
+                              </td>
                               <td className="px-4 py-3 text-right">{p.profit_factor.toFixed(2)}</td>
                               <td className="px-4 py-3 text-right">{p.total_trades}</td>
                               <td className="px-4 py-3 text-right">{p.open_positions}</td>
@@ -763,7 +805,8 @@ export default function SimulationPage() {
                             </>
                           )}
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -977,7 +1020,7 @@ export default function SimulationPage() {
                                           </td>
                                           <td className="px-4 py-2 text-gray-400 text-xs">
                                             {pos.entry_timestamp
-                                              ? new Date(pos.entry_timestamp).toLocaleTimeString()
+                                              ? new Date(pos.entry_timestamp).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris' })
                                               : 'N/A'}
                                           </td>
                                           <td className="px-4 py-2 text-right">${pos.entry_price.toFixed(4)}</td>
@@ -990,8 +1033,8 @@ export default function SimulationPage() {
                                           </td>
                                           <td className="px-4 py-2 text-center">
                                             {pos.last_sync ? (
-                                              <span className="text-xs text-cyan-400" title={new Date(pos.last_sync).toLocaleString()}>
-                                                {new Date(pos.last_sync).toLocaleTimeString()}
+                                              <span className="text-xs text-cyan-400" title={new Date(pos.last_sync).toLocaleString('fr-FR', { timeZone: 'Europe/Paris' })}>
+                                                {new Date(pos.last_sync).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris' })}
                                               </span>
                                             ) : (
                                               <span className="text-xs text-gray-500">-</span>
@@ -1074,7 +1117,7 @@ export default function SimulationPage() {
                           {pos.entry_timestamp ? (
                             <>
                               <div>{new Date(pos.entry_timestamp).toLocaleDateString()}</div>
-                              <div className="text-xs text-gray-500">{new Date(pos.entry_timestamp).toLocaleTimeString()}</div>
+                              <div className="text-xs text-gray-500">{new Date(pos.entry_timestamp).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris' })}</div>
                             </>
                           ) : 'N/A'}
                         </td>
@@ -1086,8 +1129,8 @@ export default function SimulationPage() {
                         <td className="px-4 py-3 text-right">{formatCurrency(pos.allocated_capital)}</td>
                         <td className="px-4 py-3 text-center">
                           {pos.last_sync ? (
-                            <span className="text-xs text-cyan-400" title={new Date(pos.last_sync).toLocaleString()}>
-                              {new Date(pos.last_sync).toLocaleTimeString()}
+                            <span className="text-xs text-cyan-400" title={new Date(pos.last_sync).toLocaleString('fr-FR', { timeZone: 'Europe/Paris' })}>
+                              {new Date(pos.last_sync).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris' })}
                             </span>
                           ) : (
                             <span className="text-xs text-gray-500">-</span>
@@ -1195,7 +1238,7 @@ export default function SimulationPage() {
                       </div>
                       <div>
                         <div className="text-gray-400">Entry Time</div>
-                        <div className="font-medium">{selectedPosition.entry_timestamp ? new Date(selectedPosition.entry_timestamp).toLocaleString() : 'N/A'}</div>
+                        <div className="font-medium">{selectedPosition.entry_timestamp ? new Date(selectedPosition.entry_timestamp).toLocaleString('fr-FR', { timeZone: 'Europe/Paris' }) : 'N/A'}</div>
                       </div>
                       <div>
                         <div className="text-gray-400">Allocated Capital</div>
@@ -1244,7 +1287,7 @@ export default function SimulationPage() {
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                         <div>
                           <div className="text-gray-400">Alert Time</div>
-                          <div className="font-medium">{new Date(selectedPosition.alert.alert_timestamp).toLocaleString()}</div>
+                          <div className="font-medium">{new Date(selectedPosition.alert.alert_timestamp).toLocaleString('fr-FR', { timeZone: 'Europe/Paris' })}</div>
                         </div>
                         <div>
                           <div className="text-gray-400">Scanner Score</div>
@@ -1439,7 +1482,7 @@ export default function SimulationPage() {
                                 {duration !== null ? `${duration}h` : '-'}
                               </td>
                               <td className="px-3 py-2 text-right text-sm text-gray-400">
-                                {exitTime ? exitTime.toLocaleString() : '-'}
+                                {exitTime ? exitTime.toLocaleString('fr-FR', { timeZone: 'Europe/Paris' }) : '-'}
                               </td>
                             </tr>
                           );

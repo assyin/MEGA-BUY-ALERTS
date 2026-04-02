@@ -44,18 +44,24 @@ class AlertCapture:
         self._running = False
         self._task: Optional[asyncio.Task] = None
 
-    async def start(self, polling_interval: int = 30) -> None:
+    async def start(self, polling_interval: int = 30, load_history_days: int = 0) -> None:
         """
         Start the alert capture service.
 
         Args:
             polling_interval: Seconds between API polls
+            load_history_days: If > 0, load historical alerts on startup
         """
         if self._running:
             logger.warning("Alert capture already running")
             return
 
         self._running = True
+
+        # Load historical alerts on startup to catch missed alerts
+        if load_history_days > 0:
+            await self._load_historical_alerts(load_history_days)
+
         self._task = asyncio.create_task(self._poll_loop(polling_interval))
         logger.info(f"Alert capture started (polling every {polling_interval}s)")
 
@@ -70,6 +76,44 @@ class AlertCapture:
                 pass
         logger.info("Alert capture stopped")
 
+    async def _load_historical_alerts(self, days: int) -> None:
+        """
+        Load historical alerts on startup to catch any alerts
+        that were missed while the simulator was offline.
+
+        Args:
+            days: Number of days of history to load
+        """
+        logger.info(f"📥 Loading historical alerts ({days} days)...")
+        try:
+            alerts = await self.alerts_client.fetch_alerts_for_period(
+                days=days, limit=1000
+            )
+
+            new_count = 0
+            for alert in alerts:
+                alert_id = alert.get("id")
+                if not alert_id:
+                    continue
+
+                # Skip already seen or in database
+                if alert_id in self._seen_alert_ids:
+                    continue
+                if self.database.alert_exists(alert_id):
+                    self._seen_alert_ids.add(alert_id)
+                    continue
+
+                # Process new alert
+                await self._process_new_alert(alert)
+                new_count += 1
+
+            logger.info(
+                f"📥 Historical load complete: {new_count} new alerts "
+                f"from {len(alerts)} total ({days} days)"
+            )
+        except Exception as e:
+            logger.error(f"Error loading historical alerts: {e}")
+
     async def _poll_loop(self, interval: int) -> None:
         """Main polling loop."""
         while self._running:
@@ -82,7 +126,7 @@ class AlertCapture:
 
     async def _fetch_and_process_alerts(self) -> None:
         """Fetch and process new alerts."""
-        alerts = await self.alerts_client.fetch_alerts(limit=50)
+        alerts = await self.alerts_client.fetch_alerts(limit=200)
 
         for alert in alerts:
             alert_id = alert.get("id")

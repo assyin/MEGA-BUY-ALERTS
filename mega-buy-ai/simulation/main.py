@@ -265,8 +265,29 @@ class SimulationOrchestrator:
             logger.debug(f"V5: Alert {alert_id} already in watchlist")
             return
 
+        # For historical alerts (> 1h old), skip STC check since current
+        # price data no longer reflects STC state at alert time
+        skip_stc = False
+        alert_ts = alert.get("alert_timestamp")
+        if alert_ts:
+            try:
+                from datetime import datetime, timezone
+                if isinstance(alert_ts, str):
+                    ts = datetime.fromisoformat(alert_ts.replace("Z", "+00:00"))
+                else:
+                    ts = alert_ts
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                age = datetime.now(timezone.utc) - ts
+                if age.total_seconds() > 3600:  # > 1 hour old
+                    skip_stc = True
+            except Exception:
+                pass
+
         # Check prerequisites
-        passes, rejection_reason, trendline_price = await self.v5_condition_checker.check_prerequisites(alert)
+        passes, rejection_reason, trendline_price = await self.v5_condition_checker.check_prerequisites(
+            alert, skip_stc=skip_stc
+        )
 
         if not passes:
             logger.info(f"V5: Alert {alert['pair']} rejected - {rejection_reason}")
@@ -274,6 +295,13 @@ class SimulationOrchestrator:
 
         # Create watchlist entry
         entry = WatchlistEntry.from_alert(alert, trendline_price)
+
+        # For historical alerts, extend deadline to 72h from now
+        # (original deadline based on alert_time may already be expired)
+        if skip_stc:
+            entry.deadline = now_utc() + timedelta(hours=72)
+            logger.info(f"V5: Extended deadline for historical alert {alert['pair']} → {entry.deadline}")
+
         self.watchlist_manager.add_entry(entry)
 
         # Save to database
@@ -451,8 +479,12 @@ class SimulationOrchestrator:
         for position in self.position_manager.get_all_open_positions():
             self.price_monitor.add_symbol(position.pair)
 
-        # Start LIVE mode components
-        await self.alert_capture.start(self.settings.global_config.alert_polling_interval_sec)
+        # Start LIVE mode components (load historical alerts on startup)
+        history_days = self.settings.global_config.backtest_days  # default 7 days
+        await self.alert_capture.start(
+            self.settings.global_config.alert_polling_interval_sec,
+            load_history_days=history_days
+        )
         await self.price_monitor.start(self.settings.global_config.price_polling_interval_sec)
 
         # Start V5 monitoring

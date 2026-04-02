@@ -68,8 +68,9 @@ def create_app(orchestrator: Optional[SimulationOrchestrator] = None) -> "FastAP
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Lifespan context manager for startup/shutdown."""
-        # Startup
+        # Startup - launch LIVE simulation (alert capture + V5 monitoring)
         logger.info("Starting simulation API server...")
+        await orchestrator.start()
         yield
         # Shutdown
         logger.info("Shutting down simulation API server...")

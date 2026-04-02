@@ -23,6 +23,26 @@ try:
 except ImportError:
     GSPREAD_OK = False
 
+# Supabase — Push alerts to database
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+    from supabase import create_client
+    _supabase_url = os.getenv("SUPABASE_URL", "")
+    _supabase_key = os.getenv("SUPABASE_SERVICE_KEY", "")
+    if _supabase_url and _supabase_key:
+        _supabase = create_client(_supabase_url, _supabase_key)
+        SUPABASE_OK = True
+        print("✅ Supabase connected")
+    else:
+        _supabase = None
+        SUPABASE_OK = False
+        print("⚠️ Supabase: missing SUPABASE_URL or SUPABASE_SERVICE_KEY in .env")
+except Exception as e:
+    _supabase = None
+    SUPABASE_OK = False
+    print(f"⚠️ Supabase not available: {e}")
+
 # ═══════════════════════════════════════════════════════
 # ⚙️ CONFIGURATION — MODIFIER ICI
 # ═══════════════════════════════════════════════════════
@@ -103,14 +123,42 @@ _http_session.mount('https://', requests.adapters.HTTPAdapter(
     pool_connections=20, pool_maxsize=20, max_retries=2))
 
 
+def _get_trading_symbols():
+    """Get symbols with TRADING status from Binance exchangeInfo.
+    Excludes delisted pairs (BREAK status)."""
+    try:
+        url = f"{BINANCE_BASE}/api/v3/exchangeInfo"
+        resp = _http_session.get(url, timeout=15)
+        data = resp.json()
+        return {s["symbol"] for s in data.get("symbols", [])
+                if s.get("status") == "TRADING" and s["symbol"].endswith("USDT")}
+    except Exception:
+        return None  # Fallback: don't filter
+
+_trading_cache = None
+_trading_cache_time = 0
+
 def get_24h_volumes():
+    global _trading_cache, _trading_cache_time
     url = f"{BINANCE_BASE}/api/v3/ticker/24hr"
     resp = _http_session.get(url, timeout=30)
     data = resp.json()
+
+    # Refresh trading status cache every hour
+    if _trading_cache is None or (time.time() - _trading_cache_time) > 3600:
+        _trading_cache = _get_trading_symbols()
+        _trading_cache_time = time.time()
+        if _trading_cache:
+            print(f"📋 Trading pairs refreshed: {len(_trading_cache)} active")
+
     volumes = {}
     for t in data:
-        if t["symbol"].endswith("USDT"):
-            volumes[t["symbol"]] = float(t["quoteVolume"])
+        symbol = t["symbol"]
+        if symbol.endswith("USDT"):
+            # Skip if not in TRADING status (delisted/halted)
+            if _trading_cache and symbol not in _trading_cache:
+                continue
+            volumes[symbol] = float(t["quoteVolume"])
     return volumes
 
 
@@ -514,15 +562,145 @@ def detect_mega_buy(df):
     score = sum(1 for v in conds.values() if v)
 
     if score >= combo_min:
+        # LazyBar value and color
+        lz_val = ht[idx]
+        lz_color = "Red" if lz_val >= 9.6 else "Yellow" if lz_val >= 6 else "Green" if lz_val > 0 else "Navy"
+
+        # EC RSI move (current - previous)
+        ec_move = float(ec_rsi[idx] - ec_rsi[idx - 1]) if idx > 0 else 0
+
+        # RSI move
+        rsi_move = float(rsi_vals[idx] - rsi_vals[idx - 1]) if idx > 0 else 0
+
+        # DI moves
+        di_plus_move = float(plus_di[idx] - plus_di[idx - 1]) if idx > 0 else 0
+        di_minus_move = float(minus_di[idx] - minus_di[idx - 1]) if idx > 0 else 0
+
+        # ADX
+        adx_val = float(adx[idx])
+
         return {
             "score": score,
             "price": close[idx],
             "rsi": rsi_vals[idx],
             "di_plus": plus_di[idx],
+            "di_minus": minus_di[idx],
+            "adx": adx_val,
             "candle_pct": candle_pct,
             "conditions": conds,
+            # Per-TF detailed values
+            "lazy_value": float(lz_val),
+            "lazy_color": lz_color,
+            "ec_move": ec_move,
+            "rsi_move": rsi_move,
+            "di_plus_move": di_plus_move,
+            "di_minus_move": di_minus_move,
+            # Volume ratio vs 20-bar average (real vol_pct)
+            "vol_pct": float(volume[idx] / np.mean(volume[max(0,idx-20):idx]) * 100) if idx > 20 and np.mean(volume[max(0,idx-20):idx]) > 0 else 0,
         }
     return None
+
+
+# ═══════════════════════════════════════════════════════
+# 📤 SUPABASE — Push alerts to database
+# ═══════════════════════════════════════════════════════
+def push_alerts_to_supabase(sorted_signals, candle_key):
+    """Push detected MEGA BUY alerts to Supabase for the dashboard."""
+    if not SUPABASE_OK or _supabase is None:
+        return
+
+    now_ts = datetime.now(timezone.utc).isoformat()
+
+    for symbol, tf_results in sorted_signals:
+        try:
+            # Get best score across all TFs
+            best_score = max(r["score"] for r in tf_results.values())
+            tfs = list(tf_results.keys())
+
+            # Get detection details from best TF (highest score, prefer longer TF)
+            tf_priority = {"4h": 4, "1h": 3, "30m": 2, "15m": 1}
+            best_tf_key = max(tf_results.keys(), key=lambda t: (tf_results[t]["score"], tf_priority.get(t, 0)))
+            first_tf = tf_results[best_tf_key]
+            conditions = first_tf.get("conditions", {})
+
+            # Build alert record matching Supabase schema
+            # Convert numpy types to native Python types for JSON
+            def _py(v):
+                if hasattr(v, 'item'): return v.item()  # numpy scalar
+                return v
+
+            alert_data = {
+                "pair": symbol,
+                "price": float(first_tf.get("price", 0)),
+                "alert_timestamp": now_ts,
+                "timeframes": tfs,
+                "scanner_score": int(best_score),
+                "bougie_4h": candle_key.replace("_", " ") + "h",
+                # Mandatory conditions (keys match detect_mega_buy output)
+                "rsi_check": bool(conditions.get("RSI", False)),
+                "dmi_check": bool(conditions.get("DMI", False)),
+                "ast_check": bool(conditions.get("AST", False)),
+                # Optional conditions
+                "choch": bool(conditions.get("CHoCH", False)),
+                "zone": bool(conditions.get("Zone", False)),
+                "lazy": bool(conditions.get("Lazy", False)),
+                "vol": bool(conditions.get("Vol", False)),
+                "st": bool(conditions.get("ST", False)),
+                "pp": bool(conditions.get("PP", False)),
+                "ec": bool(conditions.get("EC", False)),
+                # Indicators
+                "di_plus_4h": float(first_tf["di_plus"]) if first_tf.get("di_plus") is not None else None,
+                "di_minus_4h": float(first_tf["di_minus"]) if first_tf.get("di_minus") is not None else None,
+                "adx_4h": float(first_tf["adx"]) if first_tf.get("adx") is not None else None,
+                # Volume per TF
+                "vol_pct": {tf: float(r.get("vol_pct", 0)) for tf, r in tf_results.items()},
+                # LazyBar values per TF
+                "lazy_values": {
+                    tf: f"{abs(r.get('lazy_value', 0)):.1f} {r.get('lazy_color', '')}"
+                    for tf, r in tf_results.items()
+                    if r.get("lazy_value") is not None
+                } or None,
+                # LazyBar moves (color indicator)
+                "lazy_moves": {
+                    tf: "🔴" if r.get("lazy_color") == "Red" else "🟡" if r.get("lazy_color") == "Yellow" else "🟢" if r.get("lazy_color") == "Green" else "🟣"
+                    for tf, r in tf_results.items()
+                } or None,
+                # EC RSI moves per TF
+                "ec_moves": {
+                    tf: round(float(r.get("ec_move", 0)), 2)
+                    for tf, r in tf_results.items()
+                } or None,
+                # RSI moves per TF
+                "rsi_moves": {
+                    tf: round(float(r.get("rsi_move", 0)), 2)
+                    for tf, r in tf_results.items()
+                } or None,
+                # DI moves per TF
+                "di_plus_moves": {
+                    tf: round(float(r.get("di_plus_move", 0)), 2)
+                    for tf, r in tf_results.items()
+                } or None,
+                "di_minus_moves": {
+                    tf: round(float(r.get("di_minus_move", 0)), 2)
+                    for tf, r in tf_results.items()
+                } or None,
+                # RSI — numeric column in Supabase, use best TF value
+                "rsi": round(float(first_tf.get("rsi", 0)), 2),
+                # ADX moves per TF — JSONB column
+                "adx_moves": {
+                    tf: round(float(r.get("adx", 0)), 2)
+                    for tf, r in tf_results.items()
+                } or None,
+                # Puissance (best score)
+                "puissance": int(best_score),
+                # Number of TFs
+                "nb_timeframes": len(tfs),
+            }
+
+            _supabase.table("alerts").upsert(alert_data, on_conflict="pair,bougie_4h,timeframes").execute()
+
+        except Exception as e:
+            print(f"  ⚠️ Supabase push error for {symbol}: {e}")
 
 
 # ═══════════════════════════════════════════════════════
@@ -903,9 +1081,22 @@ def run_scan():
     try:
         print("📋 Récupération des paires USDT...")
         volumes = get_24h_volumes()
-        pairs = [p for p, v in volumes.items() if v >= MIN_VOLUME_USDT]
+
+        # Exclude stablecoins, pegged assets, forex, wrapped tokens
+        STABLECOIN_BLACKLIST = {
+            "USDCUSDT", "FDUSDUSDT", "TUSDUSDT", "BUSDUSDT", "DAIUSDT",
+            "USDPUSDT", "USTCUSDT", "LUSDUSDT", "FRAXUSDT", "USDDUSDT",
+            "USDTUSDT", "USD1USDT", "USDEUSDT", "PYUSDUSDT", "GUSDUSDT",
+            "USDYUSDT", "CEURUSDT", "EURCUSDT",
+            "PAXGUSDT", "XAUTUSDT",
+            "EURUSDT", "GBPUSDT", "JPYUSDT", "AUDUSDT", "TRYUSDT",
+            "WBTCUSDT", "WBETHUSDT", "BETHUSDT", "STETHUSDT", "CBETHUSDT",
+        }
+
+        pairs = [p for p, v in volumes.items()
+                 if v >= MIN_VOLUME_USDT and p not in STABLECOIN_BLACKLIST]
         pairs.sort(key=lambda p: volumes.get(p, 0), reverse=True)
-        print(f"✅ {len(pairs)} paires avec volume > ${MIN_VOLUME_USDT:,.0f}")
+        print(f"✅ {len(pairs)} paires avec volume > ${MIN_VOLUME_USDT:,.0f} (excl. {len(STABLECOIN_BLACKLIST)} stablecoins)")
 
         # Collecter les nouveaux signaux par paire (multi-TF)
         new_signals = {}  # { "BTCUSDT": {"30m": result, "1h": result} }
@@ -1007,6 +1198,7 @@ def run_scan():
 
             send_telegram(msg)
             log_signals_to_sheets(sorted_signals, candle_key)
+            push_alerts_to_supabase(sorted_signals, candle_key)
             last_signals = dict(sorted_signals)
         else:
             print("  ℹ️ Aucun nouveau signal à notifier")

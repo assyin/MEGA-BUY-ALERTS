@@ -455,6 +455,22 @@ async def get_backtest_status(task_id: str):
     return backtest_status[task_id]
 
 
+@app.get("/api/running-backtests")
+async def get_running_backtests():
+    """Get all currently running/queued backtests."""
+    running = []
+    for task_id, status in backtest_status.items():
+        if status.get("status") in ("running", "queued"):
+            symbol = task_id.split("_")[0] if "_" in task_id else task_id
+            running.append({
+                "task_id": task_id,
+                "symbol": symbol,
+                "status": status.get("status"),
+                "progress": status.get("progress", ""),
+            })
+    return running
+
+
 @app.get("/api/symbols")
 async def list_symbols():
     """List all symbols with backtests"""
