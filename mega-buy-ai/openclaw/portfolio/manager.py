@@ -204,8 +204,10 @@ class PortfolioManager:
         size_usd = balance * size_pct / 100
         size_usd = max(size_usd, 10)  # Minimum $10
 
-        # --- Get current price ---
-        price = await self._get_price(pair)
+        # --- Get price (use alert price = signal time, fallback to live) ---
+        price = alert.get("price", 0) or 0
+        if not price:
+            price = await self._get_price(pair)
         if not price:
             print(f"💼 Portfolio: cannot get price for {pair}")
             return None

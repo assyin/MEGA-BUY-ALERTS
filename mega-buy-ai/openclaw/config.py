@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     supabase_service_key: str = ""
 
     # Pipeline
-    poll_interval_sec: int = 15
+    poll_interval_sec: int = 5
     analysis_timeout_sec: int = 30
 
     # Circuit Breaker

@@ -16,6 +16,7 @@ class AlertListener:
         self.on_new_alert = on_new_alert
         self._seen_ids: Set[str] = set()
         self._seen_pair_bougie: Set[str] = set()  # Dedup by pair+bougie_4h
+        self._pair_cooldown: dict = {}  # pair → last processed timestamp (30min cooldown)
         self._running = False
         self._task = None
 
@@ -66,8 +67,12 @@ class AlertListener:
                 await self._check_new_alerts()
                 # Clean old dedup entries every 100 cycles (~25 min at 15s interval)
                 cycle += 1
-                if cycle % 100 == 0 and len(self._seen_pair_bougie) > 500:
-                    self._seen_pair_bougie.clear()
+                if cycle % 100 == 0:
+                    if len(self._seen_pair_bougie) > 500:
+                        self._seen_pair_bougie.clear()
+                    # Clean old cooldowns (> 1h)
+                    now_ts = datetime.now(timezone.utc).timestamp()
+                    self._pair_cooldown = {k: v for k, v in self._pair_cooldown.items() if now_ts - v < 3600}
             except Exception as e:
                 print(f"⚠️ Poll error: {e}")
             await asyncio.sleep(self.settings.poll_interval_sec)
@@ -103,6 +108,13 @@ class AlertListener:
                         continue
                     self._seen_pair_bougie.add(dedup_key)
 
+                    # Cooldown: first decision is final — no re-process within 30 min
+                    now_ts = datetime.now(timezone.utc).timestamp()
+                    last_processed = self._pair_cooldown.get(pair, 0)
+                    if now_ts - last_processed < 1800:  # 30 min cooldown
+                        continue
+                    self._pair_cooldown[pair] = now_ts
+
                     new_alerts.append(alert)
 
             if new_alerts:
@@ -121,14 +133,21 @@ class AlertListener:
                 else:
                     print(f"🆕 {len(new_alerts)} new alerts, processing {len(to_process)}")
 
-                # Process sequentially with delay to respect Claude rate limits
-                for alert in to_process:
-                    try:
-                        print(f"🔍 Processing: {alert.get('pair')} {alert.get('scanner_score')}/10")
-                        await self.on_new_alert(alert)
-                    except Exception as e:
-                        print(f"⚠️ Error processing {alert.get('pair')}: {e}")
-                    await asyncio.sleep(5)  # 5s between alerts for rate limit
+                # Process ALL alerts in PARALLEL — multi-agent approach
+                # Semaphore limits concurrent agents to avoid API overload
+                sem = asyncio.Semaphore(5)  # Max 5 simultaneous agent analyses
+
+                async def _process_one(alert):
+                    async with sem:
+                        pair = alert.get('pair', '?')
+                        try:
+                            print(f"🔍 Processing: {pair} {alert.get('scanner_score')}/10")
+                            await self.on_new_alert(alert)
+                        except Exception as e:
+                            print(f"⚠️ Error processing {pair}: {e}")
+
+                await asyncio.gather(*[_process_one(a) for a in to_process], return_exceptions=True)
+                print(f"✅ Batch complete: {len(to_process)} alerts processed in parallel")
 
         except Exception as e:
             print(f"⚠️ Fetch error: {e}")

@@ -24,7 +24,11 @@ interface OpenClawDecision {
   analysis_text?: string | null  // lazy-loaded in modal
   alert_id: string | null
   scanner_score: number | null
-  chart_path?: string | null  // lazy-loaded in modal
+  chart_path?: string | null
+  outcome_at?: string | null
+  pnl_max_at?: string | null  // lazy-loaded in modal
+  // Merged from alerts table
+  alert_data?: Record<string, any> | null
 }
 
 interface UsageSummary {
@@ -52,7 +56,7 @@ interface Report {
 
 type TabType = 'tracker' | 'stats' | 'hourly' | 'daily' | 'audit' | 'engagements'
 
-const ITEMS_PER_PAGE = 25
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 500] as const
 
 // ─── Helper Functions ────────────────────────────────────────
 function getDecisionStyle(dec: string) {
@@ -75,17 +79,65 @@ function getOutcomeStyle(outcome: string | null) {
 
 function toGMT1(dateStr: string): string {
   const d = new Date(dateStr)
-  d.setHours(d.getHours() + 1)
-  return d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" })
+  // Force UTC+1 display regardless of browser timezone
+  const utc1 = new Date(d.getTime() + 1 * 3600000)
+  const dd = String(utc1.getUTCDate()).padStart(2, '0')
+  const mm = String(utc1.getUTCMonth() + 1).padStart(2, '0')
+  const yy = String(utc1.getUTCFullYear()).slice(-2)
+  const hh = String(utc1.getUTCHours()).padStart(2, '0')
+  const mn = String(utc1.getUTCMinutes()).padStart(2, '0')
+  return `${dd}/${mm}/${yy} ${hh}:${mn}`
 }
 
 // ─── Main Component ──────────────────────────────────────────
 export default function OpenClawPageClient() {
+  const ALL_COLUMNS = [
+    { key: 'date', label: 'Date', default: true },
+    { key: 'pair', label: 'Paire', default: true },
+    { key: 'vip', label: 'VIP', default: true },
+    { key: 'tfs', label: 'TFs', default: true },
+    { key: 'score', label: 'Score', default: true },
+    { key: 'di_plus', label: 'DI+', default: true },
+    { key: 'di_minus', label: 'DI-', default: true },
+    { key: 'adx', label: 'ADX', default: true },
+    { key: 'di_spread', label: 'D±', default: true },
+    { key: 'rsi', label: 'RSI', default: true },
+    { key: 'change24h', label: '24h%', default: true },
+    { key: 'body4h', label: 'Body', default: true },
+    { key: 'range4h', label: 'Range', default: true },
+    { key: 'vol_1h', label: 'V1h', default: true },
+    { key: 'vol_4h', label: 'V4h', default: true },
+    { key: 'vol_24h', label: 'V24h', default: true },
+    { key: 'vol_48h', label: 'V48h', default: true },
+    { key: 'stc_15m', label: 'STC15', default: true },
+    { key: 'stc_30m', label: 'STC30', default: true },
+    { key: 'stc_1h', label: 'STC1h', default: true },
+    { key: 'tf_body', label: 'TFBody', default: true },
+    { key: 'fg', label: 'F&G', default: true },
+    { key: 'btc', label: 'BTC', default: true },
+    { key: 'eth', label: 'ETH', default: true },
+    { key: 'pp', label: 'PP', default: false },
+    { key: 'ec', label: 'EC', default: false },
+    { key: 'accum', label: 'Accum', default: true },
+    { key: 'decision', label: 'Decision', default: true },
+    { key: 'grade', label: 'Grade', default: false },
+    { key: 'confidence', label: 'Conf', default: true },
+    { key: 'outcome', label: 'Outcome', default: true },
+    { key: 'pnl', label: 'PnL', default: true },
+    { key: 'pnl_max', label: 'Max', default: true },
+    { key: 'tv', label: 'TV', default: false },
+  ] as const
+  const [visibleCols, setVisibleCols] = useState<Set<string>>(() => new Set(ALL_COLUMNS.filter(c => c.default).map(c => c.key)))
+  const [showColPicker, setShowColPicker] = useState(false)
+  const col = (key: string) => visibleCols.has(key)
+  const toggleCol = (key: string) => setVisibleCols(prev => { const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s })
+
   const [activeTab, setActiveTab] = useState<TabType>('tracker')
   const [decisions, setDecisions] = useState<OpenClawDecision[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
+  const [perPage, setPerPage] = useState(25)
   const [selectedDecision, setSelectedDecision] = useState<OpenClawDecision | null>(null)
   const [pairSearch, setPairSearch] = useState('')
   const [decisionFilter, setDecisionFilter] = useState<string>('ALL')
@@ -104,8 +156,51 @@ export default function OpenClawPageClient() {
   const [maxPnl, setMaxPnl] = useState('')
   const [minScore, setMinScore] = useState('')
   const [minAccum, setMinAccum] = useState('')
-  const [gradeFilter, setGradeFilter] = useState<string>('ALL')
+  const [gradeFilter, setGradeFilter] = useState<string[]>([]) // empty = ALL, can contain multiple
   const [maxAccum, setMaxAccum] = useState('')
+  const [minDiPlus, setMinDiPlus] = useState('')
+  const [maxDiPlus, setMaxDiPlus] = useState('')
+  const [minDiMinus, setMinDiMinus] = useState('')
+  const [maxDiMinus, setMaxDiMinus] = useState('')
+  const [minAdx, setMinAdx] = useState('')
+  const [maxAdx, setMaxAdx] = useState('')
+  const [minRsi, setMinRsi] = useState('')
+  const [maxRsi, setMaxRsi] = useState('')
+  const [ppFilter, setPpFilter] = useState<string>('ALL')
+  const [ecFilter, setEcFilter] = useState<string>('ALL')
+  const [tfFilter, setTfFilter] = useState<string[]>([]) // empty = ALL, can contain multiple TFs
+  const [minPuissance, setMinPuissance] = useState('')
+  const [minVolPct, setMinVolPct] = useState('')
+  const [maxVolPct, setMaxVolPct] = useState('')
+  const [condFilters, setCondFilters] = useState<string[]>([]) // RSI,DMI,AST,CHoCH,Zone,Lazy,Vol,ST
+  const [minChange24h, setMinChange24h] = useState('')
+  const [maxChange24h, setMaxChange24h] = useState('')
+  const [minBody4h, setMinBody4h] = useState('')
+  const [maxBody4h, setMaxBody4h] = useState('')
+  const [minRange4h, setMinRange4h] = useState('')
+  const [maxRange4h, setMaxRange4h] = useState('')
+  const [dirFilter, setDirFilter] = useState<string>('ALL') // ALL, green, red
+  // Market sentiment filters
+  const [fgFilter, setFgFilter] = useState<string[]>([]) // Extreme Fear, Fear, Neutral, Greed, Extreme Greed
+  const [btcTrendFilter, setBtcTrendFilter] = useState<string>('ALL') // ALL, BULLISH, BEARISH
+  const [ethTrendFilter, setEthTrendFilter] = useState<string>('ALL')
+  const [altSeasonFilter, setAltSeasonFilter] = useState<string>('ALL') // ALL, YES, NO
+  // Volume spike filters
+  const [minVol1h, setMinVol1h] = useState('')
+  const [minVol4h, setMinVol4h] = useState('')
+  const [minVol24h, setMinVol24h] = useState('')
+  const [minVol48h, setMinVol48h] = useState('')
+  // DI Spread filter
+  const [minDiSpread, setMinDiSpread] = useState('')
+  const [maxDiSpread, setMaxDiSpread] = useState('')
+  // STC filters
+  const [maxStc15m, setMaxStc15m] = useState('')
+  const [maxStc30m, setMaxStc30m] = useState('')
+  const [maxStc1h, setMaxStc1h] = useState('')
+  // TF body filter
+  const [minTfBody, setMinTfBody] = useState('')
+  // V8/V9 All preset (union of Ultra + Vol bypass)
+  const [v8v9AllMode, setV8v9AllMode] = useState(false)
 
   // Sort
   const [sortKey, setSortKey] = useState<string>('timestamp')
@@ -128,15 +223,52 @@ export default function OpenClawPageClient() {
     else setLoading(true)
 
     try {
-      // Load agent_memory — includes features_fingerprint for VIP badge (no analysis_text)
-      const { data, error } = await supabase
-        .from("agent_memory")
-        .select("id,pair,agent_decision,agent_confidence,outcome,pnl_pct,pnl_max,pnl_min,pnl_at_close,timestamp,alert_id,scanner_score,features_fingerprint")
-        .order("timestamp", { ascending: false })
-        .limit(1000)
+      // Load agent_memory — always last 30 days, paginated
+      const since30d = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+      const fields = "id,pair,agent_decision,agent_confidence,outcome,pnl_pct,pnl_max,pnl_min,pnl_at_close,timestamp,alert_id,scanner_score,features_fingerprint,outcome_at,pnl_max_at"
+      let allRows: any[] = []
+      let page = 0
+      const PG = 1000
+      while (true) {
+        const { data: batch } = await supabase
+          .from("agent_memory")
+          .select(fields)
+          .gte("timestamp", since30d + "T00:00:00")
+          .order("timestamp", { ascending: false })
+          .range(page * PG, (page + 1) * PG - 1)
+        if (!batch || batch.length === 0) break
+        allRows = allRows.concat(batch)
+        if (batch.length < PG) break
+        page++
+      }
+      const data = allRows
+      const error = null
 
       if (!error && data) {
-        setDecisions(data)
+        // Load alert data for enrichment (conditions, puissance, lazy, vol_pct, etc.)
+        const alertIds = data.filter(d => d.alert_id).map(d => d.alert_id!)
+        let alertsMap: Record<string, any> = {}
+        if (alertIds.length > 0) {
+          // Batch load in chunks of 100
+          for (let i = 0; i < alertIds.length; i += 100) {
+            const chunk = alertIds.slice(i, i + 100)
+            const { data: alertData } = await supabase
+              .from("alerts")
+              .select("id,alert_timestamp,rsi_check,dmi_check,ast_check,choch,zone,lazy,vol,st,puissance,vol_pct,lazy_values,ec_moves,emotion,rsi_moves,nb_timeframes")
+              .in("id", chunk)
+            if (alertData) {
+              for (const a of alertData) {
+                alertsMap[a.id] = a
+              }
+            }
+          }
+        }
+        // Merge alert data into decisions
+        const enriched = data.map(d => ({
+          ...d,
+          alert_data: d.alert_id ? (alertsMap[d.alert_id] || null) : null,
+        }))
+        setDecisions(enriched)
       }
 
       // Load usage from OpenClaw API via server-side proxy to avoid CORS
@@ -173,8 +305,14 @@ export default function OpenClawPageClient() {
         if (outcomeFilter !== 'PENDING' && d.outcome !== outcomeFilter) return false
       }
       // Advanced filters
-      if (dateFrom && (d.timestamp || '') < dateFrom) return false
-      if (dateTo && (d.timestamp || '').slice(0, 10) > dateTo) return false
+      // Compare dates in GMT+1 (displayed timezone)
+      if (dateFrom || dateTo) {
+        const dt = new Date(d.timestamp || '')
+        dt.setHours(dt.getHours() + 1) // GMT+1
+        const displayDate = dt.toISOString().slice(0, 10)
+        if (dateFrom && displayDate < dateFrom) return false
+        if (dateTo && displayDate > dateTo) return false
+      }
       if (minConf && (d.agent_confidence || 0) < parseFloat(minConf) / 100) return false
       if (maxConf && (d.agent_confidence || 0) > parseFloat(maxConf) / 100) return false
       if (minPnl && (d.pnl_pct || 0) < parseFloat(minPnl)) return false
@@ -187,13 +325,18 @@ export default function OpenClawPageClient() {
         if (maxAccum && accDays > parseFloat(maxAccum)) return false
       }
       // Grade filter
-      if (gradeFilter !== 'ALL') {
+      if (gradeFilter.length > 0) {
         const grade = (d.features_fingerprint || {}).quality_grade || ''
-        if (gradeFilter === 'A+' && grade !== 'A+') return false
-        if (gradeFilter === 'A' && grade !== 'A') return false
-        if (gradeFilter === '>=A' && grade !== 'A' && grade !== 'A+') return false
-        if (gradeFilter === 'B' && grade !== 'B') return false
-        if (gradeFilter === 'C' && grade !== 'C' && grade !== '') return false
+        // Pass if grade matches any of the selected filters
+        let pass = false
+        for (const gf of gradeFilter) {
+          if (gf === 'A+' && grade === 'A+') pass = true
+          else if (gf === 'A' && grade === 'A') pass = true
+          else if (gf === '>=A' && (grade === 'A' || grade === 'A+')) pass = true
+          else if (gf === 'B' && grade === 'B') pass = true
+          else if (gf === 'C' && (grade === 'C' || grade === '')) pass = true
+        }
+        if (!pass) return false
       }
       // VIP filter
       if (vipFilter !== 'ALL') {
@@ -202,12 +345,154 @@ export default function OpenClawPageClient() {
         if (vipFilter === 'HIGH_TICKET' && !fp.is_high_ticket) return false
         if (vipFilter === 'NO_VIP' && fp.is_vip) return false
       }
+      // DI+/DI-/ADX/RSI filters
+      const fp2 = d.features_fingerprint || {}
+      if (minDiPlus && (fp2.di_plus_4h || 0) < parseFloat(minDiPlus)) return false
+      if (maxDiPlus && (fp2.di_plus_4h || 0) > parseFloat(maxDiPlus)) return false
+      if (minDiMinus && (fp2.di_minus_4h || 0) < parseFloat(minDiMinus)) return false
+      if (maxDiMinus && (fp2.di_minus_4h || 0) > parseFloat(maxDiMinus)) return false
+      if (minAdx && (fp2.adx_4h || 0) < parseFloat(minAdx)) return false
+      if (maxAdx && (fp2.adx_4h || 0) > parseFloat(maxAdx)) return false
+      if (minRsi && (fp2.rsi || 0) < parseFloat(minRsi)) return false
+      if (maxRsi && (fp2.rsi || 0) > parseFloat(maxRsi)) return false
+      // PP/EC filter
+      if (ppFilter === 'YES' && !fp2.pp) return false
+      if (ppFilter === 'NO' && fp2.pp) return false
+      if (ecFilter === 'YES' && !fp2.ec) return false
+      if (ecFilter === 'NO' && fp2.ec) return false
+      // Timeframe filter (multi-select OR logic + multi keyword for 2+ TFs)
+      if (tfFilter.length > 0) {
+        const tfs = fp2.timeframes || []
+        const hasMulti = tfFilter.includes('multi')
+        const tfList = tfFilter.filter(t => t !== 'multi')
+        // If only "multi" selected → must have 2+ TFs
+        // If specific TFs selected → must include at least one of them
+        // If both → must satisfy at least one condition
+        let pass = false
+        if (hasMulti && tfs.length >= 2) pass = true
+        if (tfList.length > 0 && tfList.some(t => tfs.includes(t))) pass = true
+        if (!pass) return false
+      }
+      // Alert-based filters (from alerts table)
+      const ad = (d as any).alert_data || {}
+      if (minPuissance && (ad.puissance || 0) < parseInt(minPuissance)) return false
+      // Vol% filter (max vol across TFs)
+      if (minVolPct || maxVolPct) {
+        const volObj = ad.vol_pct || {}
+        const maxVol = typeof volObj === 'object' ? Math.max(0, ...Object.values(volObj).map((v: any) => Number(v) || 0)) : 0
+        if (minVolPct && maxVol < parseFloat(minVolPct)) return false
+        if (maxVolPct && maxVol > parseFloat(maxVolPct)) return false
+      }
+      // Conditions filter (all required)
+      if (condFilters.length > 0) {
+        const condMap: Record<string, string> = { RSI: 'rsi_check', DMI: 'dmi_check', AST: 'ast_check', CHoCH: 'choch', Zone: 'zone', Lazy: 'lazy', Vol: 'vol', ST: 'st' }
+        for (const cf of condFilters) {
+          if (!ad[condMap[cf]]) return false
+        }
+      }
+      // 24h change filter
+      if (minChange24h || maxChange24h) {
+        const ch = fp2.change_24h_pct
+        if (ch == null) return false
+        if (minChange24h && ch < parseFloat(minChange24h)) return false
+        if (maxChange24h && ch > parseFloat(maxChange24h)) return false
+      }
+      // 4H Body filter
+      if (minBody4h || maxBody4h) {
+        const bo = fp2.candle_4h_body_pct
+        if (bo == null) return false
+        if (minBody4h && bo < parseFloat(minBody4h)) return false
+        if (maxBody4h && bo > parseFloat(maxBody4h)) return false
+      }
+      // 4H Range filter
+      if (minRange4h || maxRange4h) {
+        const ra = fp2.candle_4h_range_pct
+        if (ra == null) return false
+        if (minRange4h && ra < parseFloat(minRange4h)) return false
+        if (maxRange4h && ra > parseFloat(maxRange4h)) return false
+      }
+      // 4H Direction filter
+      if (dirFilter !== 'ALL') {
+        const di = fp2.candle_4h_direction
+        if (di !== dirFilter) return false
+      }
+      // Market sentiment filters
+      if (fgFilter.length > 0) {
+        const fg = fp2.fear_greed_label
+        if (!fg || !fgFilter.includes(fg)) return false
+      }
+      if (btcTrendFilter !== 'ALL') {
+        if (fp2.btc_trend_1h !== btcTrendFilter) return false
+      }
+      if (ethTrendFilter !== 'ALL') {
+        if (fp2.eth_trend_1h !== ethTrendFilter) return false
+      }
+      if (altSeasonFilter !== 'ALL') {
+        const alt = fp2.alt_season
+        if (alt == null) return false
+        if (altSeasonFilter === 'YES' && !alt) return false
+        if (altSeasonFilter === 'NO' && alt) return false
+      }
+      // Volume spike filters
+      if (minVol1h && (fp2.vol_spike_vs_1h == null || fp2.vol_spike_vs_1h < parseFloat(minVol1h))) return false
+      if (minVol4h && (fp2.vol_spike_vs_4h == null || fp2.vol_spike_vs_4h < parseFloat(minVol4h))) return false
+      if (minVol24h && (fp2.vol_spike_vs_24h == null || fp2.vol_spike_vs_24h < parseFloat(minVol24h))) return false
+      if (minVol48h && (fp2.vol_spike_vs_48h == null || fp2.vol_spike_vs_48h < parseFloat(minVol48h))) return false
+      // TF body filter — get the max body across alert TFs
+      if (minTfBody) {
+        const tfs2 = fp2.timeframes || []
+        const tfBodyMax = Math.max(0, ...tfs2.map((tf: string) => fp2[`candle_${tf}_body_pct`] ?? 0))
+        if (tfBodyMax < parseFloat(minTfBody)) return false
+      }
+      // STC filters (max = oversold threshold, lower = more oversold)
+      if (maxStc15m && (fp2.stc_15m == null || fp2.stc_15m > parseFloat(maxStc15m))) return false
+      if (maxStc30m && (fp2.stc_30m == null || fp2.stc_30m > parseFloat(maxStc30m))) return false
+      if (maxStc1h && (fp2.stc_1h == null || fp2.stc_1h > parseFloat(maxStc1h))) return false
+      // DI Spread filter (DI+ - DI-)
+      if (minDiSpread || maxDiSpread) {
+        const diP = fp2.di_plus_4h; const diM = fp2.di_minus_4h
+        if (diP == null || diM == null) return false
+        const spread = diP - diM
+        if (minDiSpread && spread < parseFloat(minDiSpread)) return false
+        if (maxDiSpread && spread > parseFloat(maxDiSpread)) return false
+      }
+      // V8/V9 All mode — union of Ultra (ADX 15-35, DI+<=45) OR Vol bypass (Vol>=200%, ADX 15-40, DI+<=65)
+      if (v8v9AllMode) {
+        const body = fp2.candle_4h_body_pct ?? 0
+        const rng = fp2.candle_4h_range_pct ?? 0
+        const dir = fp2.candle_4h_direction
+        const dip = fp2.di_plus_4h ?? 0
+        const adxv = fp2.adx_4h ?? 0
+        const ppv = fp2.pp
+        const ecv = fp2.ec
+        const ch = fp2.change_24h_pct ?? 0
+        const btcv = fp2.btc_trend_1h
+        const ethv = fp2.eth_trend_1h
+        const vol24 = fp2.vol_spike_vs_24h ?? 0
+        const baseGate = body >= 3 && rng >= 3.5 && dir === 'green' && adxv <= 50 && ppv && ecv && ch >= 0 && ch <= 50 && btcv === 'BULLISH' && ethv === 'BULLISH'
+        const stc15v = fp2.stc_15m ?? -1
+        const stc30v = fp2.stc_30m ?? -1
+        const stc1hv = fp2.stc_1h ?? 999
+        const stcOk = (stc15v < 0 || stc15v < 0.99) && (stc1hv >= 0.1 || stc1hv > 900)
+        const v1h = fp2.vol_spike_vs_1h ?? null; const v4h = fp2.vol_spike_vs_4h ?? null; const v24hv = fp2.vol_spike_vs_24h ?? null; const v48h = fp2.vol_spike_vs_48h ?? null
+        const allVolNeg = v1h !== null && v4h !== null && v24hv !== null && v48h !== null && v1h < 0 && v4h < 0 && v24hv < 0 && v48h < 0
+        const volOk = !allVolNeg
+        const dim = fp2.di_minus_4h ?? 0
+        const diSpread = dip - dim
+        const spreadOk = diSpread < 50
+        const confOk = (d.agent_confidence ?? 0) >= 0.60
+        const ultra = baseGate && dip <= 45 && adxv >= 15 && adxv < 35 && ch >= 1 && stcOk && volOk && spreadOk && confOk
+        const volBp = body >= 3 && rng >= 3.5 && dir === 'green' && adxv <= 50 && ppv && ecv && ch >= 1 && ch <= 50 && btcv === 'BULLISH' && dip <= 65 && adxv >= 15 && adxv < 40 && vol24 >= 200 && stcOk && volOk && spreadOk && confOk
+        if (!ultra && !volBp) return false
+      }
       return true
     })
 
     // Sort
     result.sort((a, b) => {
       let va: any, vb: any
+      const fp_a = a.features_fingerprint || {}
+      const fp_b = b.features_fingerprint || {}
       switch (sortKey) {
         case 'pair': va = a.pair || ''; vb = b.pair || ''; break
         case 'decision': va = a.agent_decision || ''; vb = b.agent_decision || ''; break
@@ -216,6 +501,34 @@ export default function OpenClawPageClient() {
         case 'pnl': va = a.pnl_pct || 0; vb = b.pnl_pct || 0; break
         case 'pnl_max': va = a.pnl_max || 0; vb = b.pnl_max || 0; break
         case 'score': va = a.scanner_score || 0; vb = b.scanner_score || 0; break
+        case 'vip': va = fp_a.is_high_ticket ? 2 : fp_a.is_vip ? 1 : 0; vb = fp_b.is_high_ticket ? 2 : fp_b.is_vip ? 1 : 0; break
+        case 'tfs': va = (fp_a.timeframes || []).length; vb = (fp_b.timeframes || []).length; break
+        case 'di_plus': va = fp_a.di_plus_4h || 0; vb = fp_b.di_plus_4h || 0; break
+        case 'di_minus': va = fp_a.di_minus_4h || 0; vb = fp_b.di_minus_4h || 0; break
+        case 'adx': va = fp_a.adx_4h || 0; vb = fp_b.adx_4h || 0; break
+        case 'rsi': va = fp_a.rsi || 0; vb = fp_b.rsi || 0; break
+        case 'change24h': va = fp_a.change_24h_pct || 0; vb = fp_b.change_24h_pct || 0; break
+        case 'body4h': va = fp_a.candle_4h_body_pct || 0; vb = fp_b.candle_4h_body_pct || 0; break
+        case 'range4h': va = fp_a.candle_4h_range_pct || 0; vb = fp_b.candle_4h_range_pct || 0; break
+        case 'di_spread': va = (fp_a.di_plus_4h || 0) - (fp_a.di_minus_4h || 0); vb = (fp_b.di_plus_4h || 0) - (fp_b.di_minus_4h || 0); break
+        case 'vol_1h': va = fp_a.vol_spike_vs_1h || 0; vb = fp_b.vol_spike_vs_1h || 0; break
+        case 'vol_4h': va = fp_a.vol_spike_vs_4h || 0; vb = fp_b.vol_spike_vs_4h || 0; break
+        case 'vol_24h': va = fp_a.vol_spike_vs_24h || 0; vb = fp_b.vol_spike_vs_24h || 0; break
+        case 'vol_48h': va = fp_a.vol_spike_vs_48h || 0; vb = fp_b.vol_spike_vs_48h || 0; break
+        case 'stc_15m': va = fp_a.stc_15m ?? 999; vb = fp_b.stc_15m ?? 999; break
+        case 'stc_30m': va = fp_a.stc_30m ?? 999; vb = fp_b.stc_30m ?? 999; break
+        case 'stc_1h': va = fp_a.stc_1h ?? 999; vb = fp_b.stc_1h ?? 999; break
+        case 'tf_body': {
+          const tfsA = fp_a.timeframes || []; const tfsB = fp_b.timeframes || []
+          va = Math.max(0, ...tfsA.map((tf: string) => fp_a[`candle_${tf}_body_pct`] ?? 0))
+          vb = Math.max(0, ...tfsB.map((tf: string) => fp_b[`candle_${tf}_body_pct`] ?? 0))
+          break
+        }
+        case 'fg': va = fp_a.fear_greed_value || 0; vb = fp_b.fear_greed_value || 0; break
+        case 'pp': va = fp_a.pp ? 1 : 0; vb = fp_b.pp ? 1 : 0; break
+        case 'ec': va = fp_a.ec ? 1 : 0; vb = fp_b.ec ? 1 : 0; break
+        case 'accum': va = fp_a.accumulation_days || 0; vb = fp_b.accumulation_days || 0; break
+        case 'grade': va = fp_a.quality_grade === 'A+' ? 4 : fp_a.quality_grade === 'A' ? 3 : fp_a.quality_grade === 'B' ? 2 : fp_a.quality_grade === 'C' ? 1 : 0; vb = fp_b.quality_grade === 'A+' ? 4 : fp_b.quality_grade === 'A' ? 3 : fp_b.quality_grade === 'B' ? 2 : fp_b.quality_grade === 'C' ? 1 : 0; break
         default: va = a.timestamp || ''; vb = b.timestamp || ''
       }
       if (va < vb) return sortDir === 'asc' ? -1 : 1
@@ -224,7 +537,7 @@ export default function OpenClawPageClient() {
     })
 
     return result
-  }, [decisions, pairSearch, decisionFilter, outcomeFilter, vipFilter, gradeFilter, dateFrom, dateTo, minConf, maxConf, minPnl, maxPnl, minScore, minAccum, maxAccum, sortKey, sortDir])
+  }, [decisions, pairSearch, decisionFilter, outcomeFilter, vipFilter, gradeFilter, dateFrom, dateTo, minConf, maxConf, minPnl, maxPnl, minScore, minAccum, maxAccum, minDiPlus, maxDiPlus, minDiMinus, maxDiMinus, minAdx, maxAdx, minRsi, maxRsi, ppFilter, ecFilter, tfFilter, minPuissance, minVolPct, maxVolPct, condFilters, minChange24h, maxChange24h, minBody4h, maxBody4h, minRange4h, maxRange4h, dirFilter, fgFilter, btcTrendFilter, ethTrendFilter, altSeasonFilter, minVol1h, minVol4h, minVol24h, minVol48h, maxStc15m, maxStc30m, maxStc1h, minTfBody, minDiSpread, maxDiSpread, v8v9AllMode, sortKey, sortDir])
 
   // ─── Stats ───────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -262,8 +575,8 @@ export default function OpenClawPageClient() {
   }, [filtered])
 
   // ─── Pagination ──────────────────────────────────────────
-  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE)
-  const paged = filtered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE)
+  const totalPages = Math.ceil(filtered.length / perPage)
+  const paged = filtered.slice((currentPage - 1) * perPage, currentPage * perPage)
 
   useEffect(() => { setCurrentPage(1) }, [pairSearch, decisionFilter, outcomeFilter, vipFilter])
 
@@ -277,7 +590,7 @@ export default function OpenClawPageClient() {
   }
 
   return (
-    <div className="p-6 space-y-6 max-w-[1600px] mx-auto">
+    <div className="px-3 py-4 space-y-4 w-full">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -415,7 +728,7 @@ export default function OpenClawPageClient() {
 
             {(pairSearch || decisionFilter !== 'ALL' || outcomeFilter !== 'ALL' || vipFilter !== 'ALL') && (
               <button
-                onClick={() => { setPairSearch(''); setDecisionFilter('ALL'); setOutcomeFilter('ALL'); setVipFilter('ALL'); setGradeFilter('ALL'); setDateFrom(''); setDateTo(''); setMinConf(''); setMaxConf(''); setMinPnl(''); setMaxPnl(''); setMinScore(''); setMinAccum(''); setMaxAccum('') }}
+                onClick={() => { setPairSearch(''); setDecisionFilter('ALL'); setOutcomeFilter('ALL'); setVipFilter('ALL'); setGradeFilter([]); setDateFrom(''); setDateTo(''); setMinConf(''); setMaxConf(''); setMinPnl(''); setMaxPnl(''); setMinScore(''); setMinAccum(''); setMaxAccum(''); setMinDiPlus(''); setMaxDiPlus(''); setMinDiMinus(''); setMaxDiMinus(''); setMinAdx(''); setMaxAdx(''); setMinRsi(''); setMaxRsi(''); setPpFilter('ALL'); setEcFilter('ALL'); setTfFilter([]); setMinPuissance(''); setMinVolPct(''); setMaxVolPct(''); setCondFilters([]); setMinChange24h(''); setMaxChange24h(''); setMinBody4h(''); setMaxBody4h(''); setMinRange4h(''); setMaxRange4h(''); setDirFilter('ALL'); setFgFilter([]); setBtcTrendFilter('ALL'); setEthTrendFilter('ALL'); setAltSeasonFilter('ALL'); setMinVol1h(''); setMinVol4h(''); setMinVol24h(''); setMinVol48h(''); setMinDiSpread(''); setMaxDiSpread(''); setMaxStc15m(''); setMaxStc30m(''); setMaxStc1h(''); setMinTfBody(''); setV8v9AllMode(false) }}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-200 bg-gray-800 border border-gray-700 hover:bg-gray-700"
               >
                 <X className="w-3 h-3" /> Reset
@@ -431,98 +744,587 @@ export default function OpenClawPageClient() {
               {showAdvanced ? '▼ Filtres avances' : '▶ Filtres avances'}
             </button>
 
-            <span className="text-xs text-gray-500 ml-auto">{filtered.length} resultats</span>
           </div>
 
           {/* Advanced Filters Panel */}
-          {showAdvanced && (
-            <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
+          {showAdvanced && (<>
+            {/* Row 2: DI+, DI-, ADX, RSI, Puissance, Vol% */}
+            <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-10 gap-3">
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">Date debut</label>
-                <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-purple-500" />
-              </div>
-              <div>
-                <label className="text-[10px] text-gray-500 uppercase">Date fin</label>
-                <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-purple-500" />
-              </div>
-              <div>
-                <label className="text-[10px] text-gray-500 uppercase">Conf min %</label>
-                <input type="number" placeholder="0" value={minConf} onChange={e => setMinConf(e.target.value)}
+                <label className="text-[10px] text-gray-500 uppercase">DI+ min</label>
+                <input type="number" placeholder="0" value={minDiPlus} onChange={e => setMinDiPlus(e.target.value)}
                   className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">Conf max %</label>
-                <input type="number" placeholder="100" value={maxConf} onChange={e => setMaxConf(e.target.value)}
+                <label className="text-[10px] text-gray-500 uppercase">DI+ max</label>
+                <input type="number" placeholder="100" value={maxDiPlus} onChange={e => setMaxDiPlus(e.target.value)}
                   className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">PnL min %</label>
-                <input type="number" placeholder="-100" value={minPnl} onChange={e => setMinPnl(e.target.value)}
+                <label className="text-[10px] text-gray-500 uppercase">DI- min</label>
+                <input type="number" placeholder="0" value={minDiMinus} onChange={e => setMinDiMinus(e.target.value)}
                   className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">PnL max %</label>
-                <input type="number" placeholder="100" value={maxPnl} onChange={e => setMaxPnl(e.target.value)}
+                <label className="text-[10px] text-gray-500 uppercase">DI- max</label>
+                <input type="number" placeholder="100" value={maxDiMinus} onChange={e => setMaxDiMinus(e.target.value)}
                   className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">Score min</label>
-                <input type="number" placeholder="0" min="0" max="10" value={minScore} onChange={e => setMinScore(e.target.value)}
+                <label className="text-[10px] text-gray-500 uppercase">ADX min</label>
+                <input type="number" placeholder="0" value={minAdx} onChange={e => setMinAdx(e.target.value)}
                   className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">Accum min (j)</label>
-                <input type="number" placeholder="0" step="0.5" min="0" value={minAccum} onChange={e => setMinAccum(e.target.value)}
+                <label className="text-[10px] text-gray-500 uppercase">ADX max</label>
+                <input type="number" placeholder="100" value={maxAdx} onChange={e => setMaxAdx(e.target.value)}
                   className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">Accum max (j)</label>
-                <input type="number" placeholder="30" step="0.5" min="0" value={maxAccum} onChange={e => setMaxAccum(e.target.value)}
+                <label className="text-[10px] text-gray-500 uppercase">RSI min</label>
+                <input type="number" placeholder="0" value={minRsi} onChange={e => setMinRsi(e.target.value)}
                   className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">Grade Qualite</label>
+                <label className="text-[10px] text-gray-500 uppercase">RSI max</label>
+                <input type="number" placeholder="100" value={maxRsi} onChange={e => setMaxRsi(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Puissance ≥</label>
+                <input type="number" placeholder="0" value={minPuissance} onChange={e => setMinPuissance(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Vol% min</label>
+                <input type="number" placeholder="0" value={minVolPct} onChange={e => setMinVolPct(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">24h% min</label>
+                <input type="number" placeholder="-100" value={minChange24h} onChange={e => setMinChange24h(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">24h% max</label>
+                <input type="number" placeholder="100" value={maxChange24h} onChange={e => setMaxChange24h(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+            </div>
+            {/* Row 2bis: 4H Body / Range / Direction */}
+            <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Body 4H min %</label>
+                <input type="number" placeholder="0" value={minBody4h} onChange={e => setMinBody4h(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Body 4H max %</label>
+                <input type="number" placeholder="100" value={maxBody4h} onChange={e => setMaxBody4h(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Range 4H min %</label>
+                <input type="number" placeholder="0" value={minRange4h} onChange={e => setMinRange4h(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Range 4H max %</label>
+                <input type="number" placeholder="100" value={maxRange4h} onChange={e => setMaxRange4h(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">DI Spread min</label>
+                <input type="number" placeholder="-50" value={minDiSpread} onChange={e => setMinDiSpread(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">DI Spread max</label>
+                <input type="number" placeholder="80" value={maxDiSpread} onChange={e => setMaxDiSpread(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Vol Spike 1H min %</label>
+                <input type="number" placeholder="-100" value={minVol1h} onChange={e => setMinVol1h(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Vol Spike 4H min %</label>
+                <input type="number" placeholder="-100" value={minVol4h} onChange={e => setMinVol4h(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Vol Spike 24H min %</label>
+                <input type="number" placeholder="-100" value={minVol24h} onChange={e => setMinVol24h(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Vol Spike 48H min %</label>
+                <input type="number" placeholder="-100" value={minVol48h} onChange={e => setMinVol48h(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">TF Body min %</label>
+                <input type="number" step="0.5" placeholder="0" value={minTfBody} onChange={e => setMinTfBody(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">STC 15m max</label>
+                <input type="number" step="0.1" placeholder="1" value={maxStc15m} onChange={e => setMaxStc15m(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">STC 30m max</label>
+                <input type="number" step="0.1" placeholder="1" value={maxStc30m} onChange={e => setMaxStc30m(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">STC 1h max</label>
+                <input type="number" step="0.1" placeholder="1" value={maxStc1h} onChange={e => setMaxStc1h(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Direction 4H</label>
                 <div className="flex gap-1 mt-1">
-                  {['ALL', 'A+', 'A', '>=A', 'B', 'C'].map(g => (
-                    <button key={g} onClick={() => setGradeFilter(g)}
+                  {['ALL', 'green', 'red'].map(v => (
+                    <button key={v} onClick={() => setDirFilter(v)}
                       className={cn("px-2 py-1 rounded text-xs font-medium border transition-colors",
-                        gradeFilter === g
-                          ? g === 'ALL' ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
-                            : g === 'A+' ? 'bg-green-500/20 border-green-500/40 text-green-300 font-bold'
-                            : g === 'A' || g === '>=A' ? 'bg-green-500/15 border-green-500/30 text-green-300'
-                            : g === 'B' ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-300'
-                            : 'bg-gray-600/20 border-gray-500/30 text-gray-300'
+                        dirFilter === v
+                          ? v === 'green' ? 'bg-green-500/20 border-green-500/40 text-green-300'
+                            : v === 'red' ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                            : 'bg-purple-500/20 border-purple-500/40 text-purple-300'
                           : 'bg-gray-800 border-gray-700 text-gray-500 hover:bg-gray-700'
                       )}>
-                      {g === 'ALL' ? 'Tous' : g}
+                      {v === 'ALL' ? '—' : v === 'green' ? '🟢' : '🔴'}
                     </button>
                   ))}
                 </div>
               </div>
             </div>
-          )}
+            {/* Row 2ter: Market Sentiment */}
+            <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-5 gap-4">
+              <div className="md:col-span-2">
+                <label className="text-[10px] text-gray-500 uppercase mb-1 block">Fear & Greed (multi)</label>
+                <div className="flex gap-1 flex-wrap">
+                  <button onClick={() => setFgFilter([])}
+                    className={cn("px-2 py-1 rounded text-[10px] font-medium border transition-colors",
+                      fgFilter.length === 0 ? 'bg-purple-500/20 border-purple-500/40 text-purple-300' : 'bg-gray-800 border-gray-700 text-gray-500 hover:bg-gray-700'
+                    )}>Tous</button>
+                  {[
+                    { v: 'Extreme Fear', emoji: '😱', color: 'red' },
+                    { v: 'Fear', emoji: '😰', color: 'orange' },
+                    { v: 'Neutral', emoji: '😐', color: 'gray' },
+                    { v: 'Greed', emoji: '😊', color: 'lime' },
+                    { v: 'Extreme Greed', emoji: '🤑', color: 'green' },
+                  ].map(({v, emoji, color}) => (
+                    <button key={v} onClick={() => setFgFilter(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v])}
+                      className={cn("px-2 py-1 rounded text-[10px] font-medium border transition-colors",
+                        fgFilter.includes(v)
+                          ? color === 'red' ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                            : color === 'orange' ? 'bg-orange-500/20 border-orange-500/40 text-orange-300'
+                            : color === 'lime' ? 'bg-lime-500/20 border-lime-500/40 text-lime-300'
+                            : color === 'green' ? 'bg-green-500/20 border-green-500/40 text-green-300'
+                            : 'bg-gray-500/20 border-gray-500/40 text-gray-300'
+                          : 'bg-gray-800 border-gray-700 text-gray-500 hover:bg-gray-700'
+                      )}>{emoji} {v}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase mb-1 block">BTC Trend 1H</label>
+                <div className="flex gap-1">
+                  {['ALL', 'BULLISH', 'BEARISH'].map(v => (
+                    <button key={v} onClick={() => setBtcTrendFilter(v)}
+                      className={cn("px-2 py-1 rounded text-[10px] font-medium border transition-colors",
+                        btcTrendFilter === v
+                          ? v === 'BULLISH' ? 'bg-green-500/20 border-green-500/40 text-green-300'
+                            : v === 'BEARISH' ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                            : 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                          : 'bg-gray-800 border-gray-700 text-gray-500 hover:bg-gray-700'
+                      )}>{v === 'ALL' ? '—' : v === 'BULLISH' ? '🟢 Bull' : '🔴 Bear'}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase mb-1 block">ETH Trend 1H</label>
+                <div className="flex gap-1">
+                  {['ALL', 'BULLISH', 'BEARISH'].map(v => (
+                    <button key={v} onClick={() => setEthTrendFilter(v)}
+                      className={cn("px-2 py-1 rounded text-[10px] font-medium border transition-colors",
+                        ethTrendFilter === v
+                          ? v === 'BULLISH' ? 'bg-green-500/20 border-green-500/40 text-green-300'
+                            : v === 'BEARISH' ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                            : 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                          : 'bg-gray-800 border-gray-700 text-gray-500 hover:bg-gray-700'
+                      )}>{v === 'ALL' ? '—' : v === 'BULLISH' ? '🟢 Bull' : '🔴 Bear'}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase mb-1 block">Alt Season</label>
+                <div className="flex gap-1">
+                  {['ALL', 'YES', 'NO'].map(v => (
+                    <button key={v} onClick={() => setAltSeasonFilter(v)}
+                      className={cn("px-2 py-1 rounded text-[10px] font-medium border transition-colors",
+                        altSeasonFilter === v
+                          ? v === 'YES' ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
+                            : v === 'NO' ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                            : 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                          : 'bg-gray-800 border-gray-700 text-gray-500 hover:bg-gray-700'
+                      )}>{v === 'ALL' ? '—' : v}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            {/* Row 3: PP, EC, TF, Conditions */}
+            <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 gap-4">
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase mb-1 block">PP / EC</label>
+                <div className="flex gap-2">
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-gray-500">PP:</span>
+                    {['ALL', 'YES', 'NO'].map(v => (
+                      <button key={v} onClick={() => setPpFilter(v)} className={cn("px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors",
+                        ppFilter === v ? v === 'YES' ? 'bg-green-500/20 border-green-500/40 text-green-300' : v === 'NO' ? 'bg-red-500/20 border-red-500/40 text-red-300' : 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                          : 'bg-gray-800 border-gray-700 text-gray-500 hover:bg-gray-700'
+                      )}>{v === 'ALL' ? '—' : v}</button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-gray-500">EC:</span>
+                    {['ALL', 'YES', 'NO'].map(v => (
+                      <button key={v} onClick={() => setEcFilter(v)} className={cn("px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors",
+                        ecFilter === v ? v === 'YES' ? 'bg-green-500/20 border-green-500/40 text-green-300' : v === 'NO' ? 'bg-red-500/20 border-red-500/40 text-red-300' : 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                          : 'bg-gray-800 border-gray-700 text-gray-500 hover:bg-gray-700'
+                      )}>{v === 'ALL' ? '—' : v}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase mb-1 block">Timeframe (multi-select)</label>
+                <div className="flex gap-1 flex-wrap">
+                  <button onClick={() => setTfFilter([])} className={cn("px-2 py-0.5 rounded text-[10px] font-medium border transition-colors",
+                    tfFilter.length === 0 ? 'bg-purple-500/20 border-purple-500/40 text-purple-300' : 'bg-gray-800 border-gray-700 text-gray-500 hover:bg-gray-700'
+                  )}>Tous</button>
+                  {['15m', '30m', '1h', '4h', 'multi'].map(v => (
+                    <button key={v} onClick={() => setTfFilter(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v])}
+                      className={cn("px-2 py-0.5 rounded text-[10px] font-medium border transition-colors",
+                        tfFilter.includes(v) ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300' : 'bg-gray-800 border-gray-700 text-gray-500 hover:bg-gray-700'
+                      )}>{v}</button>
+                  ))}
+                  {tfFilter.length > 0 && (
+                    <button onClick={() => setTfFilter([])} className="px-2 py-0.5 rounded text-[10px] text-gray-400 border border-gray-700 hover:bg-gray-700">Clear</button>
+                  )}
+                </div>
+              </div>
+              <div className="col-span-2">
+                <label className="text-[10px] text-gray-500 uppercase mb-1 block">Conditions (toutes requises)</label>
+                <div className="flex gap-1 flex-wrap">
+                  {['RSI', 'DMI', 'AST', 'CHoCH', 'Zone', 'Lazy', 'Vol', 'ST'].map(c => (
+                    <button key={c} onClick={() => setCondFilters(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])}
+                      className={cn("px-2 py-0.5 rounded text-[10px] font-medium border transition-colors",
+                        condFilters.includes(c) ? 'bg-green-500/20 border-green-500/40 text-green-300' : 'bg-gray-800 border-gray-700 text-gray-500 hover:bg-gray-700'
+                      )}>{c}</button>
+                  ))}
+                  {condFilters.length > 0 && (
+                    <button onClick={() => setCondFilters([])} className="px-2 py-0.5 rounded text-[10px] text-gray-400 border border-gray-700 hover:bg-gray-700">Clear</button>
+                  )}
+                </div>
+              </div>
+            </div>
+            {/* Dynamic Stats Bar */}
+            {(() => {
+              const res = filtered.filter(d => d.outcome === 'WIN' || d.outcome === 'LOSE')
+              const wins = res.filter(d => d.outcome === 'WIN').length
+              const losses = res.length - wins
+              const wr = res.length > 0 ? (wins / res.length * 100) : 0
+              const pnls = res.filter(d => d.pnl_pct != null).map(d => d.pnl_pct!)
+              const avgPnl = pnls.length > 0 ? pnls.reduce((a, b) => a + b, 0) / pnls.length : 0
+              const totalPnl = pnls.reduce((a, b) => a + b, 0)
+              const ppCount = filtered.filter(d => (d.features_fingerprint || {}).pp).length
+              const ecCount = filtered.filter(d => (d.features_fingerprint || {}).ec).length
+              const avgScore = filtered.length > 0 ? filtered.reduce((s, d) => s + (d.scanner_score || 0), 0) / filtered.length : 0
+              const big14 = filtered.filter(d => (d.pnl_pct || 0) >= 14).length
+              return (
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+                  <div className="bg-gray-800/50 rounded-lg p-2.5 text-center">
+                    <div className="text-[10px] text-gray-500">Filtrees</div>
+                    <div className="text-sm font-bold text-white">{filtered.length}<span className="text-xs text-gray-500">/{decisions.length}</span></div>
+                  </div>
+                  <div className="bg-gray-800/50 rounded-lg p-2.5 text-center">
+                    <div className="text-[10px] text-gray-500">WR Resolu</div>
+                    <div className={cn("text-sm font-bold", wr >= 50 ? "text-green-400" : wr >= 35 ? "text-yellow-400" : "text-red-400")}>{wr.toFixed(1)}%</div>
+                    <div className="text-[10px] text-gray-600">{wins}W/{losses}L</div>
+                  </div>
+                  <div className="bg-gray-800/50 rounded-lg p-2.5 text-center">
+                    <div className="text-[10px] text-gray-500">PnL Total</div>
+                    <div className={cn("text-sm font-bold", totalPnl >= 0 ? "text-green-400" : "text-red-400")}>{totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(1)}%</div>
+                  </div>
+                  <div className="bg-gray-800/50 rounded-lg p-2.5 text-center">
+                    <div className="text-[10px] text-gray-500">Avg PnL</div>
+                    <div className={cn("text-sm font-bold", avgPnl >= 0 ? "text-green-400" : "text-red-400")}>{avgPnl >= 0 ? '+' : ''}{avgPnl.toFixed(2)}%</div>
+                  </div>
+                  <div className="bg-gray-800/50 rounded-lg p-2.5 text-center">
+                    <div className="text-[10px] text-gray-500">Score Moy</div>
+                    <div className="text-sm font-bold text-yellow-400">{avgScore.toFixed(1)}/10</div>
+                  </div>
+                  <div className="bg-gray-800/50 rounded-lg p-2.5 text-center">
+                    <div className="text-[10px] text-gray-500">PP</div>
+                    <div className="text-sm font-bold text-green-400">{ppCount}<span className="text-xs text-gray-600">/{filtered.length}</span></div>
+                  </div>
+                  <div className="bg-gray-800/50 rounded-lg p-2.5 text-center">
+                    <div className="text-[10px] text-gray-500">EC</div>
+                    <div className="text-sm font-bold text-green-400">{ecCount}<span className="text-xs text-gray-600">/{filtered.length}</span></div>
+                  </div>
+                  <div className="bg-gray-800/50 rounded-lg p-2.5 text-center">
+                    <div className="text-[10px] text-gray-500">Big W +14%</div>
+                    <div className="text-sm font-bold text-purple-400">{big14}</div>
+                  </div>
+                </div>
+              )
+            })()}
+          </>)}
+
+          {/* Quick Filters Bar — Date, Conf, PnL, Score, Accum, Grade */}
+          <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-3 grid grid-cols-3 md:grid-cols-6 lg:grid-cols-12 gap-2">
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase">Date debut</label>
+              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-purple-500" />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase">Date fin</label>
+              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-purple-500" />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase">Conf min</label>
+              <input type="number" placeholder="0" value={minConf} onChange={e => setMinConf(e.target.value)}
+                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase">Conf max</label>
+              <input type="number" placeholder="100" value={maxConf} onChange={e => setMaxConf(e.target.value)}
+                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase">PnL min</label>
+              <input type="number" placeholder="-100" value={minPnl} onChange={e => setMinPnl(e.target.value)}
+                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase">PnL max</label>
+              <input type="number" placeholder="100" value={maxPnl} onChange={e => setMaxPnl(e.target.value)}
+                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase">Score min</label>
+              <input type="number" placeholder="0" min="0" max="10" value={minScore} onChange={e => setMinScore(e.target.value)}
+                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase">Accum min</label>
+              <input type="number" placeholder="0" step="0.5" value={minAccum} onChange={e => setMinAccum(e.target.value)}
+                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase">Accum max</label>
+              <input type="number" placeholder="30" step="0.5" value={maxAccum} onChange={e => setMaxAccum(e.target.value)}
+                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+            </div>
+            <div className="lg:col-span-3">
+              <label className="text-[10px] text-gray-500 uppercase">Grade</label>
+              <div className="flex gap-1 mt-0.5">
+                <button onClick={() => setGradeFilter([])} className={cn("px-1.5 py-0.5 rounded text-[10px] font-medium border", gradeFilter.length === 0 ? 'bg-purple-500/20 border-purple-500/40 text-purple-300' : 'bg-gray-800 border-gray-700 text-gray-500')}>Tous</button>
+                {['A+', 'A', '>=A', 'B', 'C'].map(g => (
+                  <button key={g} onClick={() => setGradeFilter(prev => prev.includes(g) ? prev.filter(x => x !== g) : [...prev, g])}
+                    className={cn("px-1.5 py-0.5 rounded text-[10px] font-medium border",
+                      gradeFilter.includes(g)
+                        ? g === 'A+' ? 'bg-green-500/20 border-green-500/40 text-green-300 font-bold' : g === 'A' || g === '>=A' ? 'bg-green-500/15 border-green-500/30 text-green-300' : g === 'B' ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-300' : 'bg-gray-600/20 border-gray-500/30 text-gray-300'
+                        : 'bg-gray-800 border-gray-700 text-gray-500'
+                    )}>{g}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Results count + Quick Date + Presets */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-sm text-gray-400 font-medium">{filtered.length} resultats</span>
+            <div className="flex items-center gap-1 pl-2 border-l border-gray-700">
+              {[
+                { label: "Auj", days: 0 },
+                { label: "Hier", days: 1 },
+                { label: "J-2", days: 2 },
+                { label: "J-3", days: 3 },
+                { label: "7j", days: 7 },
+                { label: "Tout", days: -1 },
+              ].map(({ label, days }) => {
+                const gmt1Date = (daysAgo: number) => {
+                  const now = new Date(); const gmt1Ms = now.getTime() + 3600000
+                  return new Date(gmt1Ms - (daysAgo * 86400000)).toISOString().slice(0, 10)
+                }
+                const isActive = days === -1 ? !dateFrom && !dateTo : days === 7 ? dateFrom === gmt1Date(7) && !dateTo : dateFrom === gmt1Date(days) && dateTo === gmt1Date(days)
+                return (
+                  <button key={label} onClick={() => {
+                    if (days === -1) { setDateFrom(''); setDateTo(''); return }
+                    const t = gmt1Date(days)
+                    if (days === 7) { setDateFrom(t); setDateTo(''); return }
+                    setDateFrom(t); setDateTo(t)
+                  }} className={cn("px-2 py-0.5 rounded text-[10px] font-medium border transition-colors", isActive ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700')}>{label}</button>
+                )
+              })}
+              <div className="flex items-center gap-0.5">
+                <span className="text-[10px] text-gray-500">J-</span>
+                <input type="number" min="1" max="30" placeholder="X"
+                  className="w-8 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-[10px] text-gray-200 text-center focus:outline-none focus:border-cyan-500"
+                  onChange={e => { const v = parseInt(e.target.value); if (v > 0) { const now = new Date(); const t = new Date(now.getTime()+3600000-(v*86400000)).toISOString().slice(0,10); setDateFrom(t); setDateTo(t) }}} />
+              </div>
+            </div>
+            <div className="flex items-center gap-1 pl-2 border-l border-gray-700">
+              <span className="text-[10px] text-gray-600 mr-1">Presets:</span>
+              <button onClick={() => {
+                setDecisionFilter('ALL'); setMinBody4h('3'); setMinRange4h('3.5'); setDirFilter('green');
+                setMaxDiPlus('45'); setMaxAdx('50'); setPpFilter('YES'); setEcFilter('YES');
+                setMinChange24h('0'); setMaxChange24h('50'); setBtcTrendFilter('BULLISH'); setEthTrendFilter('BULLISH');
+                setMinDiSpread(''); setMaxDiSpread(''); setMinAdx(''); setV8v9AllMode(false); setShowAdvanced(true);
+              }} className="px-2 py-1 rounded text-[10px] font-medium border transition-colors bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20"
+              >Gate V6</button>
+              <button onClick={() => {
+                setDecisionFilter('ALL'); setMinBody4h('3'); setMinRange4h('3.5'); setDirFilter('green');
+                setMaxDiPlus('45'); setPpFilter('YES'); setEcFilter('YES');
+                setMinChange24h('1'); setMaxChange24h('50'); setBtcTrendFilter('BULLISH'); setEthTrendFilter('BULLISH');
+                setMinAdx('15'); setMaxAdx('35'); setMinDiSpread(''); setMaxDiSpread('');
+                setMinVol1h(''); setMinVol4h(''); setMinVol24h(''); setMinVol48h('');
+                setMaxBody4h(''); setMaxRange4h(''); setMinRsi(''); setMaxRsi('');
+                setMinDiPlus(''); setMinDiMinus(''); setMaxDiMinus('');
+                setMaxStc15m('0.99'); setMaxStc30m(''); setMaxStc1h(''); setMinTfBody('');
+                setV8v9AllMode(false); setShowAdvanced(true);
+              }} className="px-2 py-1 rounded text-[10px] font-medium border transition-colors bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20"
+              >V8/V9 Ultra</button>
+              <button onClick={() => {
+                setDecisionFilter('ALL'); setMinBody4h('3'); setMinRange4h('3.5'); setDirFilter('green');
+                setMaxDiPlus('65'); setPpFilter('YES'); setEcFilter('YES');
+                setMinChange24h('1'); setMaxChange24h('50'); setBtcTrendFilter('BULLISH'); setEthTrendFilter('BULLISH');
+                setMinAdx('15'); setMaxAdx('40'); setMinVol24h('200');
+                setMinDiSpread(''); setMaxDiSpread('');
+                setMinVol1h(''); setMinVol4h(''); setMinVol48h('');
+                setMaxBody4h(''); setMaxRange4h(''); setMinRsi(''); setMaxRsi('');
+                setMinDiPlus(''); setMinDiMinus(''); setMaxDiMinus('');
+                setMaxStc15m('0.99'); setMaxStc30m(''); setMaxStc1h(''); setMinTfBody('');
+                setV8v9AllMode(false); setShowAdvanced(true);
+              }} className="px-2 py-1 rounded text-[10px] font-medium border transition-colors bg-orange-500/10 border-orange-500/30 text-orange-400 hover:bg-orange-500/20"
+              >V8/V9+ Vol</button>
+              <button onClick={() => {
+                // Reset all advanced filters — let v8v9AllMode handle the logic
+                setDecisionFilter('ALL'); setMinBody4h(''); setMinRange4h(''); setDirFilter('ALL');
+                setMaxDiPlus(''); setPpFilter('ALL'); setEcFilter('ALL');
+                setMinChange24h(''); setMaxChange24h(''); setBtcTrendFilter('ALL'); setEthTrendFilter('ALL');
+                setMinAdx(''); setMaxAdx(''); setMinVol24h('');
+                setMinDiSpread(''); setMaxDiSpread('');
+                setMinVol1h(''); setMinVol4h(''); setMinVol48h('');
+                setMaxBody4h(''); setMaxRange4h(''); setMinRsi(''); setMaxRsi('');
+                setMinDiPlus(''); setMinDiMinus(''); setMaxDiMinus('');
+                setV8v9AllMode(true); setShowAdvanced(false);
+              }} className={cn("px-2 py-1 rounded text-[10px] font-medium border transition-colors",
+                v8v9AllMode ? "bg-red-500/20 border-red-500/40 text-red-300" : "bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20"
+              )}>V8/V9 All</button>
+              <button onClick={() => {
+                setMinAdx('15'); setMaxAdx('35'); setMinDiSpread(''); setMaxDiSpread('');
+                setBtcTrendFilter('BULLISH'); setMinChange24h('1');
+                setMinBody4h(''); setMinRange4h(''); setDirFilter('ALL');
+                setPpFilter('ALL'); setEcFilter('ALL'); setEthTrendFilter('ALL');
+                setMaxDiPlus(''); setMaxChange24h(''); setV8v9AllMode(false); setShowAdvanced(true);
+              }} className="px-2 py-1 rounded text-[10px] font-medium border transition-colors bg-cyan-500/10 border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20"
+              >Ultra Only</button>
+              <button onClick={() => {
+                setMinDiSpread('5'); setMaxDiSpread('15'); setMinAdx('25'); setMaxAdx('40');
+                setMinBody4h(''); setMinRange4h(''); setDirFilter('ALL');
+                setPpFilter('ALL'); setEcFilter('ALL'); setBtcTrendFilter('ALL'); setEthTrendFilter('ALL');
+                setMinChange24h(''); setMaxChange24h(''); setV8v9AllMode(false); setShowAdvanced(true);
+              }} className="px-2 py-1 rounded text-[10px] font-medium border transition-colors bg-purple-500/10 border-purple-500/30 text-purple-400 hover:bg-purple-500/20"
+              >Sweet Spot</button>
+              <button onClick={() => {
+                setMinVol24h('100'); setMinBody4h('3');
+                setMinAdx(''); setMaxAdx(''); setMinDiSpread(''); setMaxDiSpread('');
+                setDirFilter('ALL'); setPpFilter('ALL'); setEcFilter('ALL');
+                setBtcTrendFilter('ALL'); setEthTrendFilter('ALL');
+                setMinChange24h(''); setMaxChange24h(''); setMinRange4h(''); setV8v9AllMode(false); setShowAdvanced(true);
+              }} className="px-2 py-1 rounded text-[10px] font-medium border transition-colors bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
+              >Body+Vol</button>
+            </div>
+          </div>
+
+          {/* Column Picker */}
+          <div className="relative inline-block">
+            <button onClick={() => setShowColPicker(!showColPicker)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded-lg text-xs text-gray-300 border border-gray-700 transition-colors">
+              <Eye className="w-3.5 h-3.5" /> Colonnes ({visibleCols.size}/{ALL_COLUMNS.length})
+            </button>
+            {showColPicker && (
+              <div className="absolute top-full left-0 mt-1 z-50 bg-gray-900 border border-gray-700 rounded-lg p-2 shadow-xl grid grid-cols-5 gap-1 min-w-[500px]">
+                {ALL_COLUMNS.map(c => (
+                  <label key={c.key} className={cn("flex items-center gap-1.5 px-2 py-1 rounded text-[10px] cursor-pointer transition-colors",
+                    visibleCols.has(c.key) ? "bg-purple-500/15 text-purple-300" : "text-gray-500 hover:text-gray-300"
+                  )}>
+                    <input type="checkbox" checked={visibleCols.has(c.key)} onChange={() => toggleCol(c.key)}
+                      className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-purple-500 focus:ring-0 focus:ring-offset-0" />
+                    {c.label}
+                  </label>
+                ))}
+                <div className="col-span-5 flex gap-2 mt-1 pt-1 border-t border-gray-800">
+                  <button onClick={() => setVisibleCols(new Set(ALL_COLUMNS.map(c => c.key)))}
+                    className="text-[10px] text-gray-400 hover:text-gray-200">Tout</button>
+                  <button onClick={() => setVisibleCols(new Set(ALL_COLUMNS.filter(c => c.default).map(c => c.key)))}
+                    className="text-[10px] text-gray-400 hover:text-gray-200">Reset</button>
+                  <button onClick={() => setVisibleCols(new Set(['date','pair','pnl','pnl_max']))}
+                    className="text-[10px] text-gray-400 hover:text-gray-200">Minimal</button>
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Table */}
           <div className="bg-gray-900/50 rounded-xl border border-gray-800 overflow-hidden">
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto overflow-y-auto max-h-[70vh]">
               <table className="w-full text-sm">
-                <thead>
+                <thead className="sticky top-0 z-30 bg-gray-900">
                   <tr className="border-b border-gray-800 text-gray-400 text-xs uppercase">
-                    <th className="px-4 py-3 text-left cursor-pointer hover:text-gray-200" onClick={() => toggleSort('timestamp')}>Date{sortIcon('timestamp')}</th>
-                    <th className="px-4 py-3 text-left cursor-pointer hover:text-gray-200" onClick={() => toggleSort('pair')}>Paire{sortIcon('pair')}</th>
-                    <th className="px-4 py-3 text-center">VIP</th>
-                    <th className="px-4 py-3 text-center">Accum</th>
-                    <th className="px-4 py-3 text-center cursor-pointer hover:text-gray-200" onClick={() => toggleSort('score')}>Score{sortIcon('score')}</th>
-                    <th className="px-4 py-3 text-center cursor-pointer hover:text-gray-200" onClick={() => toggleSort('decision')}>Decision{sortIcon('decision')}</th>
-                    <th className="px-4 py-3 text-center">Grade</th>
-                    <th className="px-4 py-3 text-center cursor-pointer hover:text-gray-200" onClick={() => toggleSort('confidence')}>Confiance{sortIcon('confidence')}</th>
-                    <th className="px-4 py-3 text-center cursor-pointer hover:text-gray-200" onClick={() => toggleSort('outcome')}>Outcome{sortIcon('outcome')}</th>
-                    <th className="px-4 py-3 text-right cursor-pointer hover:text-gray-200" onClick={() => toggleSort('pnl')}>PnL Live{sortIcon('pnl')}</th>
-                    <th className="px-4 py-3 text-right cursor-pointer hover:text-gray-200" onClick={() => toggleSort('pnl_max')}>PnL Max{sortIcon('pnl_max')}</th>
-                    <th className="px-4 py-3 text-center">Chart</th>
-                    <th className="px-4 py-3 text-center">Details</th>
+                    {col('date') && <th className="px-2 py-2 text-left cursor-pointer hover:text-gray-200 text-[10px]" onClick={() => toggleSort('timestamp')}>Date{sortIcon('timestamp')}</th>}
+                    {col('pair') && <th className="px-2 py-2 text-left cursor-pointer hover:text-gray-200 text-[10px]" onClick={() => toggleSort('pair')}>Paire{sortIcon('pair')}</th>}
+                    {col('vip') && <th className="px-1 py-2 text-center cursor-pointer hover:text-gray-200 text-[10px]" onClick={() => toggleSort('vip')}>VIP{sortIcon('vip')}</th>}
+                    {col('tfs') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('tfs')}>TFs{sortIcon('tfs')}</th>}
+                    {col('score') && <th className="px-1 py-2 text-center cursor-pointer hover:text-gray-200 text-[10px]" onClick={() => toggleSort('score')}>Score{sortIcon('score')}</th>}
+                    {col('di_plus') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('di_plus')}>DI+{sortIcon('di_plus')}</th>}
+                    {col('di_minus') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('di_minus')}>DI-{sortIcon('di_minus')}</th>}
+                    {col('adx') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('adx')}>ADX{sortIcon('adx')}</th>}
+                    {col('di_spread') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('di_spread')}>D±{sortIcon('di_spread')}</th>}
+                    {col('rsi') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('rsi')}>RSI{sortIcon('rsi')}</th>}
+                    {col('change24h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('change24h')}>24h%{sortIcon('change24h')}</th>}
+                    {col('body4h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('body4h')}>Body{sortIcon('body4h')}</th>}
+                    {col('range4h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('range4h')}>Range{sortIcon('range4h')}</th>}
+                    {col('vol_1h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('vol_1h')}>V1h{sortIcon('vol_1h')}</th>}
+                    {col('vol_4h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('vol_4h')}>V4h{sortIcon('vol_4h')}</th>}
+                    {col('vol_24h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('vol_24h')}>V24h{sortIcon('vol_24h')}</th>}
+                    {col('vol_48h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('vol_48h')}>V48h{sortIcon('vol_48h')}</th>}
+                    {col('stc_15m') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('stc_15m')}>S15{sortIcon('stc_15m')}</th>}
+                    {col('stc_30m') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('stc_30m')}>S30{sortIcon('stc_30m')}</th>}
+                    {col('stc_1h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('stc_1h')}>S1h{sortIcon('stc_1h')}</th>}
+                    {col('tf_body') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('tf_body')}>TFB{sortIcon('tf_body')}</th>}
+                    {col('fg') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('fg')}>F&G{sortIcon('fg')}</th>}
+                    {col('btc') && <th className="px-1 py-2 text-center text-[10px]">BTC</th>}
+                    {col('eth') && <th className="px-1 py-2 text-center text-[10px]">ETH</th>}
+                    {col('pp') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('pp')}>PP{sortIcon('pp')}</th>}
+                    {col('ec') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('ec')}>EC{sortIcon('ec')}</th>}
+                    {col('accum') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('accum')}>Accum{sortIcon('accum')}</th>}
+                    {col('decision') && <th className="px-1 py-2 text-center cursor-pointer hover:text-gray-200 text-[10px]" onClick={() => toggleSort('decision')}>Decision{sortIcon('decision')}</th>}
+                    {col('grade') && <th className="px-1 py-2 text-center cursor-pointer hover:text-gray-200 text-[10px]" onClick={() => toggleSort('grade')}>Grade{sortIcon('grade')}</th>}
+                    {col('confidence') && <th className="px-1 py-2 text-center cursor-pointer hover:text-gray-200 text-[10px]" onClick={() => toggleSort('confidence')}>Conf{sortIcon('confidence')}</th>}
+                    {col('outcome') && <th className="px-1 py-2 text-center cursor-pointer hover:text-gray-200 text-[10px]" onClick={() => toggleSort('outcome')}>Outcome{sortIcon('outcome')}</th>}
+                    {col('pnl') && <th className="px-1 py-2 text-right cursor-pointer hover:text-gray-200 text-[10px]" onClick={() => toggleSort('pnl')}>PnL{sortIcon('pnl')}</th>}
+                    {col('pnl_max') && <th className="px-1 py-2 text-right cursor-pointer hover:text-gray-200 text-[10px]" onClick={() => toggleSort('pnl_max')}>Max{sortIcon('pnl_max')}</th>}
+                    {col('tv') && <th className="px-1 py-2 text-center text-[10px]">TV</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -535,116 +1337,81 @@ export default function OpenClawPageClient() {
                         className="border-b border-gray-800/50 hover:bg-gray-800/40 transition-colors cursor-pointer"
                         onClick={() => setSelectedDecision(d)}
                       >
-                        <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">
-                          {d.timestamp ? toGMT1(d.timestamp) : '—'}
-                        </td>
-                        <td className="px-4 py-3 font-medium text-gray-200">
-                          <a
-                            href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${d.pair}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="hover:text-purple-400 transition-colors"
-                            onClick={e => e.stopPropagation()}
-                          >
-                            {d.pair?.replace('USDT', '')}
-                            <span className="text-gray-600 font-normal">USDT</span>
-                            <span className="text-[10px] ml-1 text-gray-600">↗</span>
-                          </a>
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          {(() => {
-                            const fp = d.features_fingerprint || {}
-                            if (fp.is_high_ticket) return <span title={`VIP ${fp.vip_score}/5 — High Ticket`} className="text-base cursor-help">🏆</span>
-                            if (fp.is_vip) return <span title={`VIP ${fp.vip_score}/5`} className="text-base cursor-help">⭐</span>
-                            return <span className="text-gray-700 text-xs">—</span>
-                          })()}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          {(() => {
-                            const fp = d.features_fingerprint || {}
-                            const days = fp.accumulation_days
-                            if (!days || days <= 0) return <span className="text-gray-700 text-xs">—</span>
-                            const color = days >= 5 ? 'text-green-400' : days >= 3 ? 'text-yellow-400' : 'text-gray-400'
-                            return <span className={`${color} text-xs font-medium cursor-help`} title={`Range: ${fp.accumulation_range_pct || '?'}%`}>{days.toFixed(1)}j</span>
-                          })()}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          {d.scanner_score ? (
-                            <span className={cn("font-bold", d.scanner_score >= 8 ? 'text-green-400' : d.scanner_score >= 6 ? 'text-yellow-400' : 'text-red-400')}>
-                              {d.scanner_score}/10
-                            </span>
-                          ) : (
-                            <span className="text-gray-600">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <span className={cn("px-2.5 py-1 rounded-full text-xs font-medium border", decStyle.bg, decStyle.color)}>
-                            {decStyle.icon} {decStyle.label}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          {(() => {
-                            const fp = d.features_fingerprint || {}
-                            const grade = fp.quality_grade
-                            const axes = fp.quality_axes || 0
-                            if (!grade) return <span className="text-gray-700 text-xs">—</span>
-                            const color = grade === 'A+' ? 'text-green-400 font-bold' : grade === 'A' ? 'text-green-400' : grade === 'B' ? 'text-yellow-400' : 'text-gray-500'
-                            const details = (fp.quality_details || []).join(', ')
-                            return <span className={`${color} text-xs cursor-help`} title={details || `${axes}/4 axes`}>{grade}</span>
-                          })()}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <div className="w-16 h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                              <div
-                                className={cn("h-full rounded-full", d.agent_confidence >= 0.7 ? 'bg-green-500' : d.agent_confidence >= 0.5 ? 'bg-yellow-500' : 'bg-red-500')}
-                                style={{ width: `${(d.agent_confidence || 0) * 100}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-gray-400">{((d.agent_confidence || 0) * 100).toFixed(0)}%</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <span className={cn("px-2 py-0.5 rounded text-xs font-medium", outStyle.bg, outStyle.color)}>
-                            {outStyle.label}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          {d.pnl_pct !== null && d.pnl_pct !== undefined ? (
-                            <span className={cn("font-mono font-medium", d.pnl_pct >= 0 ? 'text-green-400' : 'text-red-400')}>
-                              {d.pnl_pct >= 0 ? '+' : ''}{d.pnl_pct.toFixed(1)}%
-                            </span>
-                          ) : (
-                            <span className="text-gray-600">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          {d.pnl_max !== null && d.pnl_max !== undefined ? (
-                            <span className={cn("font-mono text-xs", (d.pnl_max || 0) >= 0 ? 'text-green-400/70' : 'text-red-400/70')}>
-                              {(d.pnl_max || 0) >= 0 ? '+' : ''}{(d.pnl_max || 0).toFixed(1)}%
-                            </span>
-                          ) : (
-                            <span className="text-gray-600 text-xs">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          {d.chart_path ? (
-                            <span className="text-green-400 text-xs">📊</span>
-                          ) : (
-                            <span className="text-gray-600 text-xs">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <button className="text-purple-400 hover:text-purple-300 text-xs underline">
-                            Voir
-                          </button>
-                        </td>
+                        {(() => {
+                          const fp = d.features_fingerprint || {}
+                          const diPlus = fp.di_plus_4h; const diMinus = fp.di_minus_4h; const adx = fp.adx_4h; const rsi = fp.rsi
+                          const tfs = fp.timeframes || []
+                          const days = fp.accumulation_days
+                          const volSpikes = [fp.vol_spike_vs_1h, fp.vol_spike_vs_4h, fp.vol_spike_vs_24h, fp.vol_spike_vs_48h]
+                          const volKeys = ['vol_1h','vol_4h','vol_24h','vol_48h']
+                          const volLabels = ['1h','4h','24h','48h']
+                          const dash = <span className="text-gray-700 text-[10px]">—</span>
+                          return (<>
+                            {col('date') && <td className="px-2 py-1 text-[10px] whitespace-nowrap">
+                              {(() => {
+                                const alertTs = (d as any).alert_data?.alert_timestamp
+                                const processTs = d.timestamp
+                                if (alertTs && processTs) {
+                                  const gap = Math.round((new Date(processTs).getTime() - new Date(alertTs).getTime()) / 60000)
+                                  return <div>
+                                    <div className="text-cyan-400" title="Heure détection scanner">{toGMT1(alertTs)}</div>
+                                    {gap > 5 && <div className="text-gray-600" title={`Traité ${gap}min après`}>+{gap}m</div>}
+                                  </div>
+                                }
+                                return <div className="text-gray-400">{processTs ? toGMT1(processTs) : '—'}</div>
+                              })()}
+                            </td>}
+                            {col('pair') && <td className="px-2 py-1 font-medium text-gray-200 text-xs"><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${d.pair}`} target="_blank" rel="noopener noreferrer" className="hover:text-purple-400" onClick={e => e.stopPropagation()}>{d.pair?.replace('USDT','')}<span className="text-gray-600 font-normal">USDT</span></a></td>}
+                            {col('vip') && <td className="px-1 py-1 text-center">{fp.is_high_ticket ? <span title={`HT ${fp.vip_score}/5`} className="cursor-help">🏆</span> : fp.is_vip ? <span title={`VIP ${fp.vip_score}/5`} className="cursor-help">⭐</span> : dash}</td>}
+                            {col('tfs') && <td className="px-1 py-1 text-center"><span className="text-[10px] text-gray-400">{tfs.length > 0 ? tfs.join(',') : '—'}</span></td>}
+                            {col('score') && <td className="px-1 py-1 text-center">{d.scanner_score ? <span className={cn("text-xs font-bold", d.scanner_score >= 8 ? 'text-green-400' : d.scanner_score >= 6 ? 'text-yellow-400' : 'text-red-400')}>{d.scanner_score}</span> : dash}</td>}
+                            {col('di_plus') && <td className="px-1 py-1 text-center">{diPlus ? <span className={cn("text-[10px] font-mono", diPlus >= 30 ? 'text-green-400' : 'text-gray-400')}>{diPlus.toFixed(0)}</span> : dash}</td>}
+                            {col('di_minus') && <td className="px-1 py-1 text-center">{diMinus ? <span className={cn("text-[10px] font-mono", diMinus <= 15 ? 'text-green-400' : diMinus >= 25 ? 'text-red-400' : 'text-gray-400')}>{diMinus.toFixed(0)}</span> : dash}</td>}
+                            {col('adx') && <td className="px-1 py-1 text-center">{adx ? <span className={cn("text-[10px] font-mono", adx >= 40 ? 'text-green-400' : adx >= 25 ? 'text-yellow-400' : 'text-gray-400')}>{adx.toFixed(0)}</span> : dash}</td>}
+                            {col('di_spread') && <td className="px-1 py-1 text-center">{diPlus != null && diMinus != null ? (() => { const sp = diPlus - diMinus; const c2 = sp >= 40 ? 'text-red-400 font-bold' : sp >= 5 && sp <= 15 ? 'text-green-400' : sp < 0 ? 'text-red-400' : 'text-gray-400'; return <span className={cn("text-[10px] font-mono", c2)} title={`DI+ ${diPlus.toFixed(0)} - DI- ${diMinus.toFixed(0)}`}>{sp >= 0 ? '+' : ''}{sp.toFixed(0)}</span> })() : dash}</td>}
+                            {col('rsi') && <td className="px-1 py-1 text-center">{rsi ? <span className={cn("text-[10px] font-mono", rsi >= 70 ? 'text-red-400' : rsi <= 30 ? 'text-green-400' : 'text-gray-400')}>{rsi.toFixed(0)}</span> : dash}</td>}
+                            {col('change24h') && <td className="px-1 py-1 text-center">{fp.change_24h_pct != null ? <span className={cn("text-[10px] font-mono", fp.change_24h_pct >= 5 ? 'text-green-400' : fp.change_24h_pct <= -5 ? 'text-red-400' : 'text-gray-400')}>{fp.change_24h_pct >= 0 ? '+' : ''}{fp.change_24h_pct.toFixed(1)}%</span> : dash}</td>}
+                            {col('body4h') && <td className="px-1 py-1 text-center">{fp.candle_4h_body_pct != null ? <span className={cn("text-[10px] font-mono", fp.candle_4h_direction === 'green' ? 'text-green-400' : 'text-red-400')}>{fp.candle_4h_body_pct.toFixed(1)}%</span> : dash}</td>}
+                            {col('range4h') && <td className="px-1 py-1 text-center">{fp.candle_4h_range_pct != null ? <span className={cn("text-[10px] font-mono", fp.candle_4h_range_pct >= 5 ? 'text-yellow-400' : 'text-gray-400')}>{fp.candle_4h_range_pct.toFixed(1)}%</span> : dash}</td>}
+                            {volSpikes.map((spike, i) => col(volKeys[i]) && <td key={volKeys[i]} className="px-1 py-1 text-center">{spike != null ? <span className={cn("text-[10px] font-mono", spike >= 200 ? 'text-green-400 font-bold' : spike >= 50 ? 'text-green-400' : spike >= 0 ? 'text-gray-400' : 'text-red-400')} title={`Vol ${volLabels[i]}: ${spike >= 0 ? '+' : ''}${spike}%`}>{spike >= 0 ? '+' : ''}{spike > 999 ? `${(spike/1000).toFixed(1)}k` : spike.toFixed(0)}%</span> : dash}</td>)}
+                            {[['stc_15m',fp.stc_15m],['stc_30m',fp.stc_30m],['stc_1h',fp.stc_1h]].map(([k,v]) => col(k as string) && <td key={k as string} className="px-1 py-1 text-center">{v != null ? <span className={cn("text-[10px] font-mono", (v as number) < 0.05 ? 'text-green-400 font-bold' : (v as number) < 0.2 ? 'text-green-400' : (v as number) < 0.5 ? 'text-yellow-400' : 'text-gray-400')} title={`STC ${(k as string).replace('stc_','')}: ${(v as number).toFixed(3)}`}>{(v as number).toFixed(2)}</span> : dash}</td>)}
+                            {col('tf_body') && (() => {
+                              const alertTfs = tfs || []
+                              const tfBodies = alertTfs.map((tf: string) => ({ tf, body: fp[`candle_${tf}_body_pct`] as number | undefined, dir: fp[`candle_${tf}_direction`] as string | undefined })).filter((x: any) => x.body != null)
+                              if (tfBodies.length === 0) return <td className="px-1 py-1 text-center">{dash}</td>
+                              const best = tfBodies.reduce((a: any, b: any) => (b.body > a.body ? b : a), tfBodies[0])
+                              return <td className="px-1 py-1 text-center">
+                                <span className={cn("text-[10px] font-mono", best.body >= 10 ? 'text-green-400 font-bold' : best.body >= 5 ? 'text-green-400' : best.body >= 3 ? 'text-yellow-400' : 'text-gray-400')}
+                                  title={tfBodies.map((x: any) => `${x.tf}: ${x.body.toFixed(1)}% ${x.dir}`).join(' | ')}>
+                                  {best.body.toFixed(1)}%<span className="text-[8px] text-gray-600 ml-0.5">{best.tf}</span>
+                                </span>
+                              </td>
+                            })()}
+                            {col('fg') && <td className="px-1 py-1 text-center">{fp.fear_greed_value != null ? (() => { const v = fp.fear_greed_value; const c3 = v <= 25 ? 'text-red-400' : v <= 45 ? 'text-orange-400' : v <= 55 ? 'text-gray-400' : v <= 75 ? 'text-lime-400' : 'text-green-400'; const em = v <= 25 ? '😱' : v <= 45 ? '😰' : v <= 55 ? '😐' : v <= 75 ? '😊' : '🤑'; return <span className={cn("text-[10px] font-mono cursor-help", c3)} title={fp.fear_greed_label}>{em}{v}</span> })() : dash}</td>}
+                            {col('btc') && <td className="px-1 py-1 text-center">{fp.btc_trend_1h ? <span className={cn("text-[10px]", fp.btc_trend_1h === 'BULLISH' ? 'text-green-400' : 'text-red-400')}>{fp.btc_trend_1h === 'BULLISH' ? '🟢' : '🔴'}</span> : dash}</td>}
+                            {col('eth') && <td className="px-1 py-1 text-center">{fp.eth_trend_1h ? <span className={cn("text-[10px]", fp.eth_trend_1h === 'BULLISH' ? 'text-green-400' : 'text-red-400')}>{fp.eth_trend_1h === 'BULLISH' ? '🟢' : '🔴'}</span> : dash}</td>}
+                            {col('pp') && <td className="px-1 py-1 text-center">{fp.pp ? <span className="text-green-400 text-[10px]">✓</span> : <span className="text-gray-700 text-[10px]">✗</span>}</td>}
+                            {col('ec') && <td className="px-1 py-1 text-center">{fp.ec ? <span className="text-green-400 text-[10px]">✓</span> : <span className="text-gray-700 text-[10px]">✗</span>}</td>}
+                            {col('accum') && <td className="px-1 py-1 text-center">{days && days > 0 ? <span className={cn("text-[10px]", days >= 5 ? 'text-green-400' : days >= 3 ? 'text-yellow-400' : 'text-gray-400')}>{days.toFixed(1)}j</span> : dash}</td>}
+                            {col('decision') && <td className="px-1 py-1 text-center"><span className={cn("px-1.5 py-0.5 rounded-full text-[10px] font-medium border", decStyle.bg, decStyle.color)}>{decStyle.icon} {decStyle.label}</span></td>}
+                            {col('grade') && <td className="px-1 py-1 text-center">{(() => { const gr = fp.quality_grade; if (!gr) return dash; const gc = gr === 'A+' ? 'text-green-400 font-bold' : gr === 'A' ? 'text-green-400' : gr === 'B' ? 'text-yellow-400' : 'text-gray-500'; return <span className={`${gc} text-xs cursor-help`} title={(fp.quality_details || []).join(', ') || `${fp.quality_axes||0}/4`}>{gr}</span> })()}</td>}
+                            {col('confidence') && <td className="px-1 py-1 text-center"><span className={cn("text-[10px] font-mono", d.agent_confidence >= 0.7 ? 'text-green-400' : d.agent_confidence >= 0.5 ? 'text-yellow-400' : 'text-gray-400')}>{((d.agent_confidence || 0) * 100).toFixed(0)}%</span></td>}
+                            {col('outcome') && <td className="px-1 py-1 text-center"><span className={cn("px-1.5 py-0.5 rounded text-[10px] font-medium", outStyle.bg, outStyle.color)}>{outStyle.label}</span></td>}
+                            {col('pnl') && (() => {
+                              const resolved = d.outcome && d.outcome !== 'PENDING'
+                              const pnlVal = resolved && d.pnl_at_close != null ? d.pnl_at_close : (d.pnl_pct ?? null)
+                              return <td className="px-1 py-1 text-right">{pnlVal != null ? (<div><span className={cn("font-mono text-[10px]", pnlVal >= 0 ? 'text-green-400' : 'text-red-400')}>{pnlVal >= 0 ? '+' : ''}{pnlVal.toFixed(1)}%</span>{d.outcome_at && d.timestamp ? (() => { const h = (new Date(d.outcome_at).getTime() - new Date(d.timestamp).getTime()) / 3600000; const dj = Math.floor(h/24); const dh = Math.floor(h%24); return <div className="text-[8px] text-gray-500">{dj > 0 ? `${dj}j${dh}h` : `${dh}h`}</div> })() : null}</div>) : dash}</td>
+                            })()}
+                            {col('pnl_max') && <td className="px-1 py-1 text-right">{d.pnl_max != null ? (<div><span className={cn("font-mono text-[10px]", (d.pnl_max||0) >= 0 ? 'text-green-400/70' : 'text-red-400/70')}>{(d.pnl_max||0) >= 0 ? '+' : ''}{(d.pnl_max||0).toFixed(1)}%</span>{d.pnl_max_at && d.timestamp ? (() => { const h = (new Date(d.pnl_max_at).getTime() - new Date(d.timestamp).getTime()) / 3600000; const dj = Math.floor(h/24); const dh = Math.floor(h%24); return <div className="text-[8px] text-gray-500">{dj > 0 ? `${dj}j${dh}h` : `${dh}h`}</div> })() : null}</div>) : dash}</td>}
+                            {col('tv') && <td className="px-1 py-1 text-center"><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${d.pair}`} target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:text-purple-300 text-[10px]" onClick={e => e.stopPropagation()}>📊</a></td>}
+                          </>)
+                        })()}
                       </tr>
                     )
                   })}
                   {paged.length === 0 && (
                     <tr>
-                      <td colSpan={13} className="px-4 py-12 text-center text-gray-500">
+                      <td colSpan={24} className="px-4 py-12 text-center text-gray-500">
                         Aucune decision trouvee
                       </td>
                     </tr>
@@ -654,19 +1421,29 @@ export default function OpenClawPageClient() {
             </div>
 
             {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between px-4 py-3 border-t border-gray-800">
+            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-800">
+              <div className="flex items-center gap-3">
                 <span className="text-xs text-gray-500">
                   Page {currentPage}/{totalPages} — {filtered.length} resultats
                 </span>
+                <div className="flex items-center gap-1">
+                  {PAGE_SIZE_OPTIONS.map(n => (
+                    <button key={n} onClick={() => { setPerPage(n); setCurrentPage(1) }}
+                      className={cn("px-2 py-0.5 rounded text-[10px] font-medium border transition-colors",
+                        perPage === n ? "bg-purple-500/20 border-purple-500/40 text-purple-300" : "bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300"
+                      )}>{n}</button>
+                  ))}
+                </div>
+              </div>
+              {totalPages > 1 && (
                 <div className="flex items-center gap-1">
                   <button onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="p-1.5 rounded hover:bg-gray-800 disabled:opacity-30"><ChevronsLeft className="w-4 h-4 text-gray-400" /></button>
                   <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-1.5 rounded hover:bg-gray-800 disabled:opacity-30"><ChevronLeft className="w-4 h-4 text-gray-400" /></button>
                   <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="p-1.5 rounded hover:bg-gray-800 disabled:opacity-30"><ChevronRight className="w-4 h-4 text-gray-400" /></button>
                   <button onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages} className="p-1.5 rounded hover:bg-gray-800 disabled:opacity-30"><ChevronsRight className="w-4 h-4 text-gray-400" /></button>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </>
       )}

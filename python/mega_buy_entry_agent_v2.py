@@ -31,6 +31,12 @@ import json
 from datetime import datetime, timezone, timedelta
 
 try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
+
+try:
     import gspread
     from google.oauth2.service_account import Credentials
     GSPREAD_OK = True
@@ -41,8 +47,8 @@ except ImportError:
 # ═══════════════════════════════════════════════════════
 # ⚙️ CONFIGURATION
 # ═══════════════════════════════════════════════════════
-TELEGRAM_TOKEN = "YOUR_TOKEN_HERE"
-TELEGRAM_CHAT_ID = "YOUR_CHAT_ID"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "YOUR_TOKEN_HERE")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID")
 
 GOOGLE_SHEETS_ENABLED = True
 GOOGLE_SHEET_NAME = "MEGA BUY Alerts"

@@ -7,7 +7,7 @@ module.exports = {
     {
       name: "mega-scanner",
       cwd: "/home/assyin/MEGA-BUY-BOT/python",
-      script: "/usr/bin/python3",
+      script: "/home/assyin/MEGA-BUY-BOT/python/venv/bin/python",
       args: "mega_buy_bot.py",
       autorestart: true,
       max_restarts: 50,
@@ -22,7 +22,7 @@ module.exports = {
     {
       name: "mega-entry-agent",
       cwd: "/home/assyin/MEGA-BUY-BOT/python",
-      script: "/usr/bin/python3",
+      script: "/home/assyin/MEGA-BUY-BOT/python/venv/bin/python",
       args: "mega_buy_entry_agent_v2.py --auto",
       autorestart: true,
       max_restarts: 50,
@@ -78,21 +78,6 @@ module.exports = {
       },
     },
 
-    // 6. Dashboard (port 9000)
-    {
-      name: "mega-dashboard",
-      cwd: "/home/assyin/MEGA-BUY-BOT/mega-buy-ai/dashboard",
-      script: "npx",
-      args: "next dev -p 9000",
-      autorestart: true,
-      max_restarts: 50,
-      restart_delay: 10000,
-      watch: false,
-      interpreter: "none",
-      env: {
-        NODE_ENV: "development",
-        PORT: "9000",
-      },
-    },
+    // 6. Dashboard (port 9000) — launched by openclaw internally, not by PM2
   ],
 };

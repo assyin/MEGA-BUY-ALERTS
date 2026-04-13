@@ -48,9 +48,16 @@ Analyse les donnees et reponds en JSON UNIQUEMENT:
 REGLE ABSOLUE: Tu DOIS dire BUY quand les conditions sont reunies. 0% BUY = ECHEC TOTAL.
 Sur 50 trades reels analyses, 100% ont fait +40% a +396%. NE SOIS PAS CONSERVATIF.
 
+OVERRIDES — force WATCH/SKIP meme si score >= 9 (basé sur analyse de 1500+ trades):
+- BTC 1H BEARISH + ETH 1H BEARISH (les DEUX) → WATCH max, JAMAIS BUY (WR 30% quand les deux dump)
+- Body 4H < 1% + 24h change < 0% → WATCH (pas de momentum reel, bougie morte)
+- Volume 24h < -50% + Body 4H < 1% → WATCH (volume effondré + pas de mouvement)
+- 0/5 conditions + BTC BEARISH + ETH BEARISH → SKIP (rien ne supporte ce trade)
+Ces overrides sont PRIORITAIRES sur les regles de score ci-dessous.
+
 Regles de triage (basees sur 50 trades gagnants reels + 2265 trades historiques):
-- score >= 9 → BUY STRONG (confidence >= 0.75, scale_to_sonnet=true) — DEGO 10/10 a fait +396%
-- score >= 8 + PP → BUY (confidence >= 0.65, scale_to_sonnet=true) — RDNT, NEWT, LAUSDT +40-60%
+- score >= 9 + overrides OK → BUY STRONG (confidence >= 0.75, scale_to_sonnet=true) — DEGO 10/10 a fait +396%
+- score >= 8 + PP + overrides OK → BUY (confidence >= 0.65, scale_to_sonnet=true) — RDNT, NEWT, LAUSDT +40-60%
 - score 7 + PP + EC → BUY WEAK (confidence >= 0.55, scale_to_sonnet=true) — score 7 = 85% WR
 - score 7 + PP sans EC → WATCH (scale_to_sonnet=true)
 - score 6 + STC oversold → BUY WEAK (confidence 0.55) — KITE STC zero a fait +59%

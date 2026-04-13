@@ -28,10 +28,18 @@ from openclaw.pipeline.watchdog import Watchdog
 from openclaw.pipeline.self_trainer import SelfTrainer
 from openclaw.pipeline.daily_report import DailyReporter
 from openclaw.pipeline.hourly_report import HourlyReporter
+from openclaw.pipeline.v6v7_reporter import V6V7Reporter
 from openclaw.pipeline.timing_analyzer import TimingAnalyzer
 from openclaw.agent.chat import ChatManager
 from openclaw.portfolio.manager import PortfolioManager
 from openclaw.portfolio.manager_v2 import PortfolioManagerV2
+from openclaw.portfolio.manager_v3 import PortfolioManagerV3
+from openclaw.portfolio.manager_v4 import PortfolioManagerV4
+from openclaw.portfolio.manager_v5 import PortfolioManagerV5
+from openclaw.portfolio.manager_v6 import PortfolioManagerV6
+from openclaw.portfolio.manager_v7 import PortfolioManagerV7
+from openclaw.portfolio.manager_v8 import PortfolioManagerV8
+from openclaw.portfolio.manager_v9 import PortfolioManagerV9
 from openclaw.audit.engagements import EngagementTracker
 
 
@@ -51,13 +59,21 @@ _hourly_reporter: Optional[HourlyReporter] = None
 _timing: Optional[TimingAnalyzer] = None
 _portfolio: Optional[PortfolioManager] = None
 _portfolio_v2: Optional[PortfolioManagerV2] = None
+_portfolio_v3: Optional[PortfolioManagerV3] = None
+_portfolio_v4: Optional[PortfolioManagerV4] = None
+_portfolio_v5: Optional[PortfolioManagerV5] = None
+_portfolio_v6: Optional[PortfolioManagerV6] = None
+_portfolio_v7: Optional[PortfolioManagerV7] = None
+_portfolio_v8: Optional[PortfolioManagerV8] = None
+_portfolio_v9: Optional[PortfolioManagerV9] = None
+_v6v7_reporter: Optional[V6V7Reporter] = None
 _engagements: Optional[EngagementTracker] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle."""
-    global _agent, _bot, _listener, _processor, _tracker, _memory, _chat, _auto_bt, _watchdog, _self_trainer, _daily_reporter, _hourly_reporter, _timing, _portfolio, _portfolio_v2, _engagements
+    global _agent, _bot, _listener, _processor, _tracker, _memory, _chat, _auto_bt, _watchdog, _self_trainer, _daily_reporter, _hourly_reporter, _timing, _portfolio, _portfolio_v2, _portfolio_v3, _portfolio_v4, _portfolio_v5, _portfolio_v6, _portfolio_v7, _portfolio_v8, _portfolio_v9, _v6v7_reporter, _engagements
 
     settings = get_settings()
     print("=" * 60)
@@ -77,7 +93,14 @@ async def lifespan(app: FastAPI):
     _bot = OpenClawBot(_agent, cb, _memory)
     _portfolio = PortfolioManager(telegram_bot=_bot)
     _portfolio_v2 = PortfolioManagerV2(telegram_bot=_bot)
-    _processor = AlertProcessor(_agent, _bot, cb, _memory, portfolio=_portfolio, portfolio_v2=_portfolio_v2)
+    _portfolio_v3 = PortfolioManagerV3(telegram_bot=_bot)
+    _portfolio_v4 = PortfolioManagerV4(telegram_bot=_bot)
+    _portfolio_v5 = PortfolioManagerV5(telegram_bot=_bot)
+    _portfolio_v6 = PortfolioManagerV6(telegram_bot=_bot)
+    _portfolio_v7 = PortfolioManagerV7(telegram_bot=_bot)
+    _portfolio_v8 = PortfolioManagerV8(telegram_bot=_bot)
+    _portfolio_v9 = PortfolioManagerV9(telegram_bot=_bot)
+    _processor = AlertProcessor(_agent, _bot, cb, _memory, portfolio=_portfolio, portfolio_v2=_portfolio_v2, portfolio_v3=_portfolio_v3, portfolio_v4=_portfolio_v4, portfolio_v5=_portfolio_v5, portfolio_v6=_portfolio_v6, portfolio_v7=_portfolio_v7, portfolio_v8=_portfolio_v8, portfolio_v9=_portfolio_v9)
     _tracker = OutcomeTracker(_memory, cb, telegram_bot=_bot)
     _listener = AlertListener(on_new_alert=_processor.process_alert)
 
@@ -109,6 +132,9 @@ async def lifespan(app: FastAPI):
     # Timing analyzer — P4 pattern timing (golden hours + best days)
     _timing = TimingAnalyzer()
 
+    # V6/V7 Reporter — daily 22:30 UTC + weekly Sunday 22:00 UTC
+    _v6v7_reporter = V6V7Reporter(telegram_bot=_bot)
+
     # Engagement tracker — daily check of audit commitments at 22:00 UTC
     _engagements = EngagementTracker()
 
@@ -124,6 +150,14 @@ async def lifespan(app: FastAPI):
     await _timing.start()
     await _portfolio.start()
     await _portfolio_v2.start()
+    await _portfolio_v3.start()
+    await _portfolio_v4.start()
+    await _portfolio_v5.start()
+    await _portfolio_v6.start()
+    await _portfolio_v7.start()
+    await _portfolio_v8.start()
+    await _portfolio_v9.start()
+    await _v6v7_reporter.start()
     await _engagements.start()
 
     print("\n🟢 OpenClaw is LIVE — V1+V2 portfolios + alerts + backtesting + watchdog + self-training + timing + engagements + hourly/daily reports 24/7\n")
@@ -150,6 +184,18 @@ async def lifespan(app: FastAPI):
         await _portfolio.stop()
     if _portfolio_v2:
         await _portfolio_v2.stop()
+    if _portfolio_v3:
+        await _portfolio_v3.stop()
+    if _portfolio_v4:
+        await _portfolio_v4.stop()
+    if _portfolio_v5:
+        await _portfolio_v5.stop()
+    if _portfolio_v6:
+        await _portfolio_v6.stop()
+    if _portfolio_v7:
+        await _portfolio_v7.stop()
+    if _v6v7_reporter:
+        await _v6v7_reporter.stop()
     if _engagements:
         await _engagements.stop()
     await _bot.stop()

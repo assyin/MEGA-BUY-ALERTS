@@ -29,8 +29,9 @@ interface Position {
   vip_score: number
   is_high_ticket: boolean
   accumulation_days: number
-  // V2 fields
+  // V2+ fields
   size_remaining_pct?: number
+  remaining_size_pct?: number
   tp1_price?: number
   tp1_hit?: boolean
   tp2_price?: number
@@ -38,10 +39,12 @@ interface Position {
   trailing_active?: boolean
   trailing_sl?: number
   pnl_realized?: number
+  realized_pnl_usd?: number
   context_score?: number
   quality_grade?: string
   opened_at: string
   closed_at: string | null
+  _partial?: string
 }
 
 interface PortfolioState {
@@ -60,23 +63,31 @@ interface PortfolioState {
 function toGMT1(dateStr: string): string {
   if (!dateStr) return '—'
   const d = new Date(dateStr)
-  d.setHours(d.getHours() + 1)
-  return d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" })
+  const utc1 = new Date(d.getTime() + 1 * 3600000)
+  const dd = String(utc1.getUTCDate()).padStart(2, '0')
+  const mm = String(utc1.getUTCMonth() + 1).padStart(2, '0')
+  const yy = String(utc1.getUTCFullYear()).slice(-2)
+  const hh = String(utc1.getUTCHours()).padStart(2, '0')
+  const mn = String(utc1.getUTCMinutes()).padStart(2, '0')
+  return `${dd}/${mm}/${yy} ${hh}:${mn}`
 }
 
-function formatUsd(v: number): string {
-  return `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+function formatUsd(v: number | null | undefined): string {
+  const n = Number(v ?? 0)
+  if (!Number.isFinite(n)) return '$0.00'
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-function formatPrice(v: number): string {
-  if (!v) return '—'
-  if (v >= 1) return `$${v.toFixed(2)}`
-  if (v >= 0.01) return `$${v.toFixed(4)}`
-  return `$${v.toFixed(6)}`
+function formatPrice(v: number | null | undefined): string {
+  const n = Number(v ?? 0)
+  if (!n || !Number.isFinite(n)) return '—'
+  if (n >= 1) return `$${n.toFixed(2)}`
+  if (n >= 0.01) return `$${n.toFixed(4)}`
+  return `$${n.toFixed(6)}`
 }
 
 export default function PortfolioPageClient() {
-  const [version, setVersion] = useState<'v1' | 'v2'>('v1')
+  const [version, setVersion] = useState<'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9'>('v1')
   const [state, setState] = useState<PortfolioState | null>(null)
   const [positions, setPositions] = useState<Position[]>([])
   const [history, setHistory] = useState<Position[]>([])
@@ -84,6 +95,18 @@ export default function PortfolioPageClient() {
   const [refreshing, setRefreshing] = useState(false)
   const [tab, setTab] = useState<'overview' | 'positions' | 'history' | 'stats'>('overview')
   const [closingId, setClosingId] = useState<string | null>(null)
+
+  // === FILTERS ===
+  const [filterPair, setFilterPair] = useState('')
+  const [filterDecision, setFilterDecision] = useState<string>('ALL')
+  const [filterMinScore, setFilterMinScore] = useState<number>(0)
+  const [filterVip, setFilterVip] = useState<'ALL' | 'VIP' | 'HT' | 'NONE'>('ALL')
+  const [filterGrade, setFilterGrade] = useState<string>('ALL')
+  const [filterMinPnl, setFilterMinPnl] = useState<string>('')
+  const [filterMaxPnl, setFilterMaxPnl] = useState<string>('')
+  const [filterReason, setFilterReason] = useState<string>('ALL')
+  const [filterDateFrom, setFilterDateFrom] = useState<string>('')
+  const [filterDateTo, setFilterDateTo] = useState<string>('')
 
   const loadV1 = async () => {
     const [portfolioRes, historyRes] = await Promise.all([
@@ -110,12 +133,133 @@ export default function PortfolioPageClient() {
     if (closedRes.data) setHistory(closedRes.data as any[])
   }
 
+  const loadV3 = async () => {
+    const [stateRes, openRes, closedRes] = await Promise.all([
+      supabase.from('openclaw_portfolio_state_v3').select('*').eq('id', 'main').single(),
+      supabase.from('openclaw_positions_v3').select('*').eq('status', 'OPEN').order('opened_at', { ascending: false }),
+      supabase.from('openclaw_positions_v3').select('*').eq('status', 'CLOSED').order('closed_at', { ascending: false }).limit(200),
+    ])
+    if (stateRes.data) setState(stateRes.data as any)
+    if (openRes.data) setPositions(openRes.data as any[])
+    if (closedRes.data) setHistory(closedRes.data as any[])
+  }
+
+  const loadV5 = async () => {
+    const [stateRes, openRes, closedRes] = await Promise.all([
+      supabase.from('openclaw_portfolio_state_v5').select('*').eq('id', 'main').single(),
+      supabase.from('openclaw_positions_v5').select('*').eq('status', 'OPEN').order('opened_at', { ascending: false }),
+      supabase.from('openclaw_positions_v5').select('*').eq('status', 'CLOSED').order('closed_at', { ascending: false }).limit(200),
+    ])
+    if (stateRes.data) setState(stateRes.data as any)
+    if (openRes.data) setPositions(openRes.data as any[])
+    if (closedRes.data) setHistory(closedRes.data as any[])
+  }
+
+  const loadV4 = async () => {
+    const [stateRes, openRes, closedRes] = await Promise.all([
+      supabase.from('openclaw_portfolio_state_v4').select('*').eq('id', 'main').single(),
+      supabase.from('openclaw_positions_v4').select('*').eq('status', 'OPEN').order('opened_at', { ascending: false }),
+      supabase.from('openclaw_positions_v4').select('*').eq('status', 'CLOSED').order('closed_at', { ascending: false }).limit(200),
+    ])
+    if (stateRes.data) setState(stateRes.data as any)
+    if (openRes.data) setPositions(openRes.data as any[])
+    if (closedRes.data) setHistory(closedRes.data as any[])
+  }
+
+  const loadV6 = async () => {
+    const [stateRes, openRes, closedRes] = await Promise.all([
+      supabase.from('openclaw_portfolio_state_v6').select('*').eq('id', 'main').single(),
+      supabase.from('openclaw_positions_v6').select('*').eq('status', 'OPEN').order('opened_at', { ascending: false }),
+      supabase.from('openclaw_positions_v6').select('*').eq('status', 'CLOSED').order('closed_at', { ascending: false }).limit(200),
+    ])
+    if (stateRes.data) setState(stateRes.data as any)
+    if (openRes.data) setPositions(openRes.data as any[])
+    if (closedRes.data) setHistory(closedRes.data as any[])
+  }
+
+  const loadV7 = async () => {
+    const [stateRes, openRes, closedRes] = await Promise.all([
+      supabase.from('openclaw_portfolio_state_v7').select('*').eq('id', 'main').single(),
+      supabase.from('openclaw_positions_v7').select('*').eq('status', 'OPEN').order('opened_at', { ascending: false }),
+      supabase.from('openclaw_positions_v7').select('*').eq('status', 'CLOSED').order('closed_at', { ascending: false }).limit(200),
+    ])
+    if (stateRes.data) setState(stateRes.data as any)
+    if (openRes.data) {
+      // Map V7 fields to common Position interface (tp1_price, tp2_price, etc.)
+      const mapped = openRes.data.map((p: any) => ({
+        ...p,
+        tp1_hit: p.partial1_done,
+        tp2_hit: p.partial2_done,
+        trailing_active: p.trail_active,
+        trailing_sl: p.trail_stop,
+        size_remaining_pct: Math.round((p.remaining_size_pct || 1) * 100),
+        pnl_realized: p.realized_pnl_usd,
+      }))
+      setPositions(mapped as any[])
+    }
+    if (closedRes.data) {
+      const mapped = closedRes.data.map((p: any) => ({
+        ...p,
+        tp1_hit: p.partial1_done,
+        tp2_hit: p.partial2_done,
+        trailing_active: p.trail_active,
+        pnl_realized: p.realized_pnl_usd,
+      }))
+      setHistory(mapped as any[])
+    }
+  }
+
+  const loadV8 = async () => {
+    const [stateRes, openRes, closedRes] = await Promise.all([
+      supabase.from('openclaw_portfolio_state_v8').select('*').eq('id', 'main').single(),
+      supabase.from('openclaw_positions_v8').select('*').eq('status', 'OPEN').order('opened_at', { ascending: false }),
+      supabase.from('openclaw_positions_v8').select('*').eq('status', 'CLOSED').order('closed_at', { ascending: false }).limit(200),
+    ])
+    if (stateRes.data) setState(stateRes.data as any)
+    if (openRes.data) setPositions(openRes.data as any[])
+    if (closedRes.data) setHistory(closedRes.data as any[])
+  }
+
+  const loadV9 = async () => {
+    const [stateRes, openRes, closedRes] = await Promise.all([
+      supabase.from('openclaw_portfolio_state_v9').select('*').eq('id', 'main').single(),
+      supabase.from('openclaw_positions_v9').select('*').eq('status', 'OPEN').order('opened_at', { ascending: false }),
+      supabase.from('openclaw_positions_v9').select('*').eq('status', 'CLOSED').order('closed_at', { ascending: false }).limit(200),
+    ])
+    if (stateRes.data) setState(stateRes.data as any)
+    if (openRes.data) {
+      const mapped = openRes.data.map((p: any) => ({
+        ...p,
+        tp1_hit: p.partial1_done, tp2_hit: p.partial2_done,
+        trailing_active: p.trail_active, trailing_sl: p.trail_stop,
+        size_remaining_pct: Math.round((p.remaining_size_pct || 1) * 100),
+        pnl_realized: p.realized_pnl_usd,
+      }))
+      setPositions(mapped as any[])
+    }
+    if (closedRes.data) {
+      const mapped = closedRes.data.map((p: any) => ({
+        ...p,
+        tp1_hit: p.partial1_done, tp2_hit: p.partial2_done,
+        trailing_active: p.trail_active, pnl_realized: p.realized_pnl_usd,
+      }))
+      setHistory(mapped as any[])
+    }
+  }
+
   const loadData = async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true)
     else setLoading(true)
     try {
       if (version === 'v1') await loadV1()
-      else await loadV2()
+      else if (version === 'v2') await loadV2()
+      else if (version === 'v3') await loadV3()
+      else if (version === 'v4') await loadV4()
+      else if (version === 'v5') await loadV5()
+      else if (version === 'v6') await loadV6()
+      else if (version === 'v7') await loadV7()
+      else if (version === 'v8') await loadV8()
+      else await loadV9()
     } catch {}
     setLoading(false)
     setRefreshing(false)
@@ -153,6 +297,84 @@ export default function PortfolioPageClient() {
     setRefreshing(false)
   }
 
+  // === FILTERING (hooks must run BEFORE any early return) ===
+  const filteredPositions = useMemo(() => {
+    return positions.filter(p => {
+      if (filterPair && !p.pair.toLowerCase().includes(filterPair.toLowerCase())) return false
+      if (filterDecision !== 'ALL' && p.decision !== filterDecision) return false
+      if (filterMinScore > 0 && (p.scanner_score || 0) < filterMinScore) return false
+      if (filterVip === 'VIP' && !p.is_vip) return false
+      if (filterVip === 'HT' && !p.is_high_ticket) return false
+      if (filterVip === 'NONE' && (p.is_vip || p.is_high_ticket)) return false
+      if (filterGrade !== 'ALL' && p.quality_grade !== filterGrade) return false
+      if (filterMinPnl !== '' && (p.pnl_pct || 0) < parseFloat(filterMinPnl)) return false
+      if (filterMaxPnl !== '' && (p.pnl_pct || 0) > parseFloat(filterMaxPnl)) return false
+      if (filterReason !== 'ALL' && p.close_reason !== filterReason) return false
+      if (filterDateFrom && p.opened_at && new Date(p.opened_at) < new Date(filterDateFrom)) return false
+      if (filterDateTo && p.opened_at && new Date(p.opened_at) > new Date(filterDateTo + 'T23:59:59')) return false
+      return true
+    })
+  }, [positions, filterPair, filterDecision, filterMinScore, filterVip, filterGrade, filterMinPnl, filterMaxPnl, filterReason, filterDateFrom, filterDateTo])
+
+  // Build partial TP events from open positions (V7 hybrid trailing)
+  const partialEvents = useMemo(() => {
+    const events: (Position & { _partial?: string })[] = []
+    for (const p of positions) {
+      if (p.tp1_hit) {
+        const tp1Pct = 10
+        const tp1Size = (p.size_usd || 0) * 0.5
+        const tp1Pnl = tp1Size * tp1Pct / 100
+        events.push({
+          ...p,
+          id: p.id + '_tp1',
+          _partial: 'TP1',
+          status: 'PARTIAL',
+          close_reason: 'TP1_PARTIAL',
+          pnl_pct: tp1Pct,
+          pnl_usd: tp1Pnl,
+          size_usd: tp1Size,
+          exit_price: p.tp1_price || (p.entry_price * 1.1),
+        })
+      }
+      if (p.tp2_hit) {
+        const tp2Pct = 20
+        const tp2Size = (p.size_usd || 0) * 0.3
+        const tp2Pnl = tp2Size * tp2Pct / 100
+        events.push({
+          ...p,
+          id: p.id + '_tp2',
+          _partial: 'TP2',
+          status: 'PARTIAL',
+          close_reason: 'TP2_PARTIAL',
+          pnl_pct: tp2Pct,
+          pnl_usd: tp2Pnl,
+          size_usd: tp2Size,
+          exit_price: p.tp2_price || (p.entry_price * 1.2),
+        })
+      }
+    }
+    return events
+  }, [positions])
+
+  const filteredHistory = useMemo(() => {
+    const allEntries = [...partialEvents, ...history]
+    return allEntries.filter(p => {
+      if (filterPair && !p.pair.toLowerCase().includes(filterPair.toLowerCase())) return false
+      if (filterDecision !== 'ALL' && p.decision !== filterDecision) return false
+      if (filterMinScore > 0 && (p.scanner_score || 0) < filterMinScore) return false
+      if (filterVip === 'VIP' && !p.is_vip) return false
+      if (filterVip === 'HT' && !p.is_high_ticket) return false
+      if (filterVip === 'NONE' && (p.is_vip || p.is_high_ticket)) return false
+      if (filterGrade !== 'ALL' && p.quality_grade !== filterGrade) return false
+      if (filterMinPnl !== '' && (p.pnl_pct || 0) < parseFloat(filterMinPnl)) return false
+      if (filterMaxPnl !== '' && (p.pnl_pct || 0) > parseFloat(filterMaxPnl)) return false
+      if (filterReason !== 'ALL' && p.close_reason !== filterReason) return false
+      if (filterDateFrom && p.opened_at && new Date(p.opened_at) < new Date(filterDateFrom)) return false
+      if (filterDateTo && p.opened_at && new Date(p.opened_at) > new Date(filterDateTo + 'T23:59:59')) return false
+      return true
+    })
+  }, [history, partialEvents, filterPair, filterDecision, filterMinScore, filterVip, filterGrade, filterMinPnl, filterMaxPnl, filterReason, filterDateFrom, filterDateTo])
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -161,12 +383,51 @@ export default function PortfolioPageClient() {
     )
   }
 
-  const s = state || { balance: 5000, initial_capital: 5000, total_pnl: 0, total_trades: 0, wins: 0, losses: 0, max_drawdown_pct: 0, peak_balance: 5000, drawdown_mode: false, daily_loss_today: 0 }
+  const rawState = state || {} as any
+  const s = {
+    balance: Number(rawState.balance ?? 5000),
+    initial_capital: Number(rawState.initial_capital ?? 5000),
+    total_pnl: Number(rawState.total_pnl ?? 0),
+    total_trades: Number(rawState.total_trades ?? 0),
+    wins: Number(rawState.wins ?? 0),
+    losses: Number(rawState.losses ?? 0),
+    max_drawdown_pct: Number(rawState.max_drawdown_pct ?? 0),
+    peak_balance: Number(rawState.peak_balance ?? 5000),
+    drawdown_mode: Boolean(rawState.drawdown_mode ?? false),
+    daily_loss_today: Number(rawState.daily_loss_today ?? 0),
+  }
   const wr = s.total_trades > 0 ? (s.wins / s.total_trades * 100) : 0
+  // WR total: includes partial TP hits from open positions as wins
+  const partialWins = positions.filter(p => p.tp1_hit || p.tp2_hit).length
+  const totalWins = s.wins + partialWins
+  const totalTrades = s.total_trades + partialWins
+  const wrTotal = totalTrades > 0 ? (totalWins / totalTrades * 100) : 0
   const returnPct = s.initial_capital > 0 ? (s.total_pnl / s.initial_capital * 100) : 0
-  const inPositions = positions.reduce((sum, p) => sum + (p.size_usd || 0), 0)
-  const unrealizedPnl = positions.reduce((sum, p) => sum + (p.pnl_usd || 0), 0)
+  const inPositions = positions.reduce((sum, p) => {
+    const size = Number(p.size_usd) || 0
+    const rem = p.remaining_size_pct != null ? Number(p.remaining_size_pct) : 1
+    return sum + size * (isNaN(rem) ? 1 : rem)
+  }, 0)
+  const realizedInOpen = positions.reduce((sum, p) => sum + (Number(p.realized_pnl_usd) || 0), 0)
+  const unrealizedPnl = positions.reduce((sum, p) => {
+    const pnlPct = Number(p.pnl_pct) || 0
+    const size = Number(p.size_usd) || 0
+    const rem = p.remaining_size_pct != null ? Number(p.remaining_size_pct) : 1
+    const remaining = isNaN(rem) ? 1 : rem
+    return sum + (size * remaining * pnlPct / 100)
+  }, 0)
   const equity = s.balance + inPositions + unrealizedPnl
+
+  const resetFilters = () => {
+    setFilterPair(''); setFilterDecision('ALL'); setFilterMinScore(0); setFilterVip('ALL')
+    setFilterGrade('ALL'); setFilterMinPnl(''); setFilterMaxPnl(''); setFilterReason('ALL')
+    setFilterDateFrom(''); setFilterDateTo('')
+  }
+  const activeFilterCount = [
+    filterPair, filterDecision !== 'ALL', filterMinScore > 0, filterVip !== 'ALL',
+    filterGrade !== 'ALL', filterMinPnl, filterMaxPnl, filterReason !== 'ALL',
+    filterDateFrom, filterDateTo
+  ].filter(Boolean).length
 
   return (
     <div className="p-6 space-y-6 max-w-[1600px] mx-auto">
@@ -177,8 +438,18 @@ export default function PortfolioPageClient() {
             <Wallet className="w-7 h-7 text-green-400" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-100">Portfolio OpenClaw {version === 'v2' ? 'V2' : ''}</h1>
-            <p className="text-sm text-gray-500">{version === 'v1' ? 'V1 — TP fixe +10% / SL -8%' : 'V2 — TP partiel + Trailing Stop'}</p>
+            <h1 className="text-2xl font-bold text-gray-100">Portfolio OpenClaw {version !== 'v1' ? version.toUpperCase() : ''}</h1>
+            <p className="text-sm text-gray-500">{
+              version === 'v1' ? 'V1 — TP fixe +10% / SL -8%' :
+              version === 'v2' ? 'V2 — TP partiel + Trailing Stop' :
+              version === 'v3' ? 'V3 — 95% Conf | 3% × 25pos × Timeout 48h' :
+              version === 'v4' ? 'V4 — Gate: Score>=8 + VIP/HT + Green4H' :
+              version === 'v5' ? 'V5 — Combo: 95% + Green4H + 24h>0% | 81.8% WR' :
+              version === 'v6' ? 'V6 — Body 4H≥3% + Fixed TP+15% | 12 slots × 8% × $5K' :
+              version === 'v7' ? 'V7 — Body 4H≥3% + Hybrid Trailing | TP1 50%@+10% + TP2 30%@+20% + 20% Trail' :
+              version === 'v8' ? 'V8 — V6 + Ultra Filter (ADX 15-35 + BTC Bull + 24h>=1%) | Fixed TP+15%' :
+              'V9 — V7 + Ultra Filter (ADX 15-35 + BTC Bull + 24h>=1%) | Hybrid Trailing'
+            }</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -189,6 +460,27 @@ export default function PortfolioPageClient() {
             </button>
             <button onClick={() => setVersion('v2')} className={cn("px-3 py-2 text-sm font-medium transition-colors", version === 'v2' ? "bg-purple-500/20 text-purple-300" : "text-gray-500 hover:text-gray-300")}>
               V2
+            </button>
+            <button onClick={() => setVersion('v3')} className={cn("px-3 py-2 text-sm font-medium transition-colors", version === 'v3' ? "bg-cyan-500/20 text-cyan-300" : "text-gray-500 hover:text-gray-300")}>
+              V3
+            </button>
+            <button onClick={() => setVersion('v4')} className={cn("px-3 py-2 text-sm font-medium transition-colors", version === 'v4' ? "bg-amber-500/20 text-amber-300" : "text-gray-500 hover:text-gray-300")}>
+              V4
+            </button>
+            <button onClick={() => setVersion('v5')} className={cn("px-3 py-2 text-sm font-medium transition-colors", version === 'v5' ? "bg-emerald-500/20 text-emerald-300" : "text-gray-500 hover:text-gray-300")}>
+              V5
+            </button>
+            <button onClick={() => setVersion('v6')} className={cn("px-3 py-2 text-sm font-medium transition-colors", version === 'v6' ? "bg-pink-500/20 text-pink-300" : "text-gray-500 hover:text-gray-300")}>
+              V6
+            </button>
+            <button onClick={() => setVersion('v7')} className={cn("px-3 py-2 text-sm font-medium transition-colors", version === 'v7' ? "bg-rose-500/20 text-rose-300" : "text-gray-500 hover:text-gray-300")}>
+              V7
+            </button>
+            <button onClick={() => setVersion('v8')} className={cn("px-3 py-2 text-sm font-medium transition-colors", version === 'v8' ? "bg-amber-500/20 text-amber-300" : "text-gray-500 hover:text-gray-300")}>
+              V8
+            </button>
+            <button onClick={() => setVersion('v9')} className={cn("px-3 py-2 text-sm font-medium transition-colors", version === 'v9' ? "bg-amber-500/20 text-amber-300" : "text-gray-500 hover:text-gray-300")}>
+              V9
             </button>
           </div>
           {version === 'v1' && (
@@ -214,13 +506,14 @@ export default function PortfolioPageClient() {
       )}
 
       {/* Main Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-9 gap-3">
         <StatCard label="Equity" value={formatUsd(equity)} icon={<Wallet className="w-4 h-4" />} color={equity >= s.initial_capital ? "text-green-400" : "text-red-400"} />
         <StatCard label="Balance" value={formatUsd(s.balance)} sub={`Initial: ${formatUsd(s.initial_capital)}`} icon={<DollarSign className="w-4 h-4" />} color="text-cyan-400" />
         <StatCard label="PnL Total" value={`${s.total_pnl >= 0 ? '+' : ''}${formatUsd(s.total_pnl)}`} sub={`${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(2)}%`} icon={<TrendingUp className="w-4 h-4" />} color={s.total_pnl >= 0 ? "text-green-400" : "text-red-400"} />
         <StatCard label="Non-realise" value={`${unrealizedPnl >= 0 ? '+' : ''}${formatUsd(unrealizedPnl)}`} sub={`${positions.length} positions`} icon={<BarChart3 className="w-4 h-4" />} color={unrealizedPnl >= 0 ? "text-green-400" : "text-red-400"} />
-        <StatCard label="Win Rate" value={`${wr.toFixed(1)}%`} sub={`${s.wins}W / ${s.losses}L (${s.total_trades})`} icon={<CheckCircle className="w-4 h-4" />} color={wr >= 50 ? "text-green-400" : "text-yellow-400"} />
-        <StatCard label="Positions" value={`${positions.length}/10`} sub={`$${inPositions.toFixed(0)} alloc`} icon={<BarChart3 className="w-4 h-4" />} color="text-purple-400" />
+        <StatCard label="WR Total" value={`${wrTotal.toFixed(1)}%`} sub={`${totalWins}W / ${s.losses}L (${totalTrades}) +${partialWins} TP`} icon={<Activity className="w-4 h-4" />} color={wrTotal >= 50 ? "text-green-400" : "text-yellow-400"} />
+        <StatCard label="WR Fermes" value={`${wr.toFixed(1)}%`} sub={`${s.wins}W / ${s.losses}L (${s.total_trades})`} icon={<CheckCircle className="w-4 h-4" />} color={wr >= 50 ? "text-green-400" : "text-yellow-400"} />
+        <StatCard label="Positions" value={`${positions.length}/${version === 'v3' || version === 'v5' ? 25 : version === 'v4' ? 15 : (version === 'v6' || version === 'v7' || version === 'v8' || version === 'v9') ? 12 : 10}`} sub={`$${inPositions.toFixed(0)} alloc`} icon={<BarChart3 className="w-4 h-4" />} color="text-purple-400" />
         <StatCard label="Max DD" value={`${s.max_drawdown_pct.toFixed(1)}%`} sub={s.drawdown_mode ? '⚠️ ACTIF' : 'OK'} icon={<Shield className="w-4 h-4" />} color={s.max_drawdown_pct > 10 ? "text-red-400" : "text-green-400"} />
         <StatCard label="Perte Jour" value={`${formatUsd(s.daily_loss_today)}`} sub="max 5%" icon={<AlertTriangle className="w-4 h-4" />} color={s.daily_loss_today > s.initial_capital * 0.03 ? "text-orange-400" : "text-gray-400"} />
       </div>
@@ -232,10 +525,98 @@ export default function PortfolioPageClient() {
             "px-4 py-2 rounded-lg text-sm font-medium transition-colors border",
             tab === t ? "bg-green-500/20 border-green-500/40 text-green-300" : "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700"
           )}>
-            {t === 'overview' ? `Positions Ouvertes (${positions.length})` : t === 'positions' ? 'Details' : t === 'history' ? `Historique (${history.length})` : 'Statistiques'}
+            {t === 'overview' ? `Positions Ouvertes (${filteredPositions.length}${activeFilterCount > 0 ? `/${positions.length}` : ''})` : t === 'positions' ? 'Details' : t === 'history' ? `Historique (${filteredHistory.length}${activeFilterCount > 0 ? `/${history.length}` : ''})` : 'Statistiques'}
           </button>
         ))}
       </div>
+
+      {/* Filter Bar */}
+      {(tab === 'overview' || tab === 'positions' || tab === 'history') && (
+        <div className="bg-gray-900/40 border border-gray-800 rounded-xl p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-gray-400 uppercase">Filtres {activeFilterCount > 0 && <span className="ml-2 px-1.5 py-0.5 bg-green-500/20 text-green-400 rounded text-[10px]">{activeFilterCount} actif{activeFilterCount > 1 ? 's' : ''}</span>}</span>
+            {activeFilterCount > 0 && (
+              <button onClick={resetFilters} className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1">
+                <X className="w-3 h-3" /> Reset
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-2">
+            <input
+              type="text"
+              value={filterPair}
+              onChange={e => setFilterPair(e.target.value)}
+              placeholder="Pair (BTCUSDT...)"
+              className="px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-green-500/50"
+            />
+            <select value={filterDecision} onChange={e => setFilterDecision(e.target.value)} className="px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-green-500/50">
+              <option value="ALL">Decision (toutes)</option>
+              <option value="BUY STRONG">BUY STRONG</option>
+              <option value="BUY">BUY</option>
+              <option value="BUY WEAK">BUY WEAK</option>
+            </select>
+            <select value={filterVip} onChange={e => setFilterVip(e.target.value as any)} className="px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-green-500/50">
+              <option value="ALL">VIP (tous)</option>
+              <option value="HT">🏆 High Ticket</option>
+              <option value="VIP">⭐ VIP</option>
+              <option value="NONE">Sans badge</option>
+            </select>
+            <select value={filterGrade} onChange={e => setFilterGrade(e.target.value)} className="px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-green-500/50">
+              <option value="ALL">Grade (tous)</option>
+              <option value="A+">A+</option>
+              <option value="A">A</option>
+              <option value="B">B</option>
+              <option value="C">C</option>
+              <option value="D">D</option>
+            </select>
+            <input
+              type="number"
+              min="0" max="10"
+              value={filterMinScore || ''}
+              onChange={e => setFilterMinScore(parseInt(e.target.value) || 0)}
+              placeholder="Score min (0-10)"
+              className="px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-green-500/50"
+            />
+            <input
+              type="number"
+              value={filterMinPnl}
+              onChange={e => setFilterMinPnl(e.target.value)}
+              placeholder="PnL min %"
+              className="px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-green-500/50"
+            />
+            <input
+              type="number"
+              value={filterMaxPnl}
+              onChange={e => setFilterMaxPnl(e.target.value)}
+              placeholder="PnL max %"
+              className="px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-green-500/50"
+            />
+            <select value={filterReason} onChange={e => setFilterReason(e.target.value)} className="px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-green-500/50">
+              <option value="ALL">Raison (toutes)</option>
+              <option value="TP_HIT">TP HIT</option>
+              <option value="SL_HIT">SL HIT</option>
+              <option value="TIMEOUT_48H">TIMEOUT 48H</option>
+              <option value="TIMEOUT_72H">TIMEOUT 72H</option>
+              <option value="TRAIL_STOP">TRAIL STOP</option>
+              <option value="BREAKEVEN_STOP">BREAKEVEN</option>
+              <option value="MANUAL">MANUAL</option>
+              <option value="EXPIRED">EXPIRED</option>
+            </select>
+            <input
+              type="date"
+              value={filterDateFrom}
+              onChange={e => setFilterDateFrom(e.target.value)}
+              className="px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-green-500/50"
+            />
+            <input
+              type="date"
+              value={filterDateTo}
+              onChange={e => setFilterDateTo(e.target.value)}
+              className="px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-green-500/50"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Content */}
       {(tab === 'overview' || tab === 'positions') && (
@@ -245,26 +626,28 @@ export default function PortfolioPageClient() {
               <tr className="border-b border-gray-800 text-gray-400 text-xs uppercase">
                 <th className="px-4 py-3 text-left">Paire</th>
                 <th className="px-4 py-3 text-center">VIP</th>
-                {version === 'v2' && <th className="px-4 py-3 text-center">Ctx</th>}
-                {version === 'v2' && <th className="px-4 py-3 text-center">Grade</th>}
+                {(version === 'v2' || version === 'v7' || version === 'v9') && <th className="px-4 py-3 text-center">Ctx</th>}
+                {(version === 'v2' || version === 'v6' || version === 'v7') && <th className="px-4 py-3 text-center">Grade</th>}
+                {(version === 'v6' || version === 'v7' || version === 'v8' || version === 'v9') && <th className="px-4 py-3 text-center">Score</th>}
                 <th className="px-4 py-3 text-center">Decision</th>
                 <th className="px-4 py-3 text-right">Size</th>
-                {version === 'v2' && <th className="px-4 py-3 text-center">Remaining</th>}
+                {(version === 'v2' || version === 'v7' || version === 'v9') && <th className="px-4 py-3 text-center">Remaining</th>}
                 <th className="px-4 py-3 text-right">Entry</th>
                 <th className="px-4 py-3 text-right">Actuel</th>
                 <th className="px-4 py-3 text-right">PnL</th>
-                {version === 'v2' && <th className="px-4 py-3 text-right">Realise</th>}
+                {(version === 'v2' || version === 'v7' || version === 'v9') && <th className="px-4 py-3 text-right">Realise</th>}
                 <th className="px-4 py-3 text-right">SL</th>
-                {version === 'v1' && <th className="px-4 py-3 text-right">TP</th>}
-                {version === 'v2' && <th className="px-4 py-3 text-center">TP1</th>}
-                {version === 'v2' && <th className="px-4 py-3 text-center">TP2</th>}
-                {version === 'v2' && <th className="px-4 py-3 text-center">Trail</th>}
+                {(version === 'v1' || version === 'v6' || version === 'v8') && <th className="px-4 py-3 text-right">TP</th>}
+                {(version === 'v2' || version === 'v7' || version === 'v9') && <th className="px-4 py-3 text-center">TP1</th>}
+                {(version === 'v2' || version === 'v7' || version === 'v9') && <th className="px-4 py-3 text-center">TP2</th>}
+                {(version === 'v2' || version === 'v7' || version === 'v9') && <th className="px-4 py-3 text-center">Trail</th>}
                 <th className="px-4 py-3 text-left">Ouvert</th>
+                <th className="px-3 py-3 text-center">Timer</th>
                 {version === 'v1' && <th className="px-4 py-3 text-center">Action</th>}
               </tr>
             </thead>
             <tbody>
-              {positions.map(p => (
+              {filteredPositions.map(p => (
                 <tr key={p.id} className="border-b border-gray-800/50 hover:bg-gray-800/40 transition-colors">
                   <td className="px-4 py-3 font-medium text-gray-200">{p.pair.replace('USDT', '')}<span className="text-gray-600">USDT</span></td>
                   <td className="px-4 py-3 text-center">
@@ -272,14 +655,19 @@ export default function PortfolioPageClient() {
                       : p.is_vip ? <span title={`VIP ${p.vip_score}/5`} className="text-base cursor-help">⭐</span>
                       : <span className="text-gray-700 text-xs">—</span>}
                   </td>
-                  {version === 'v2' && <td className="px-4 py-3 text-center">
+                  {(version === 'v2' || version === 'v7' || version === 'v9') && <td className="px-4 py-3 text-center">
                     <span className={cn("text-xs font-bold", (p.context_score || 0) >= 5 ? "text-green-400" : (p.context_score || 0) >= 4 ? "text-cyan-400" : (p.context_score || 0) >= 3 ? "text-yellow-400" : "text-gray-500")}>
                       {p.context_score || 0}/5
                     </span>
                   </td>}
-                  {version === 'v2' && <td className="px-4 py-3 text-center">
+                  {(version === 'v2' || version === 'v6' || version === 'v7') && <td className="px-4 py-3 text-center">
                     <span className={cn("text-xs font-medium", p.quality_grade === 'A+' ? "text-green-400 font-bold" : p.quality_grade === 'A' ? "text-green-400" : p.quality_grade === 'B' ? "text-yellow-400" : "text-gray-500")}>
                       {p.quality_grade || '—'}
+                    </span>
+                  </td>}
+                  {(version === 'v6' || version === 'v7' || version === 'v8' || version === 'v9') && <td className="px-4 py-3 text-center">
+                    <span className={cn("text-xs font-bold", (p.scanner_score || 0) >= 9 ? "text-green-400" : (p.scanner_score || 0) >= 7 ? "text-cyan-400" : "text-yellow-400")}>
+                      {p.scanner_score || 0}/10
                     </span>
                   </td>}
                   <td className="px-4 py-3 text-center">
@@ -290,7 +678,7 @@ export default function PortfolioPageClient() {
                     )}>{p.decision}</span>
                   </td>
                   <td className="px-4 py-3 text-right text-gray-300">{formatUsd(p.size_usd)}</td>
-                  {version === 'v2' && <td className="px-4 py-3 text-center">
+                  {(version === 'v2' || version === 'v7' || version === 'v9') && <td className="px-4 py-3 text-center">
                     <span className="text-xs text-gray-400">{p.size_remaining_pct || 100}%</span>
                   </td>}
                   <td className="px-4 py-3 text-right text-gray-400 font-mono">{formatPrice(p.entry_price)}</td>
@@ -304,7 +692,7 @@ export default function PortfolioPageClient() {
                       {p.pnl_usd >= 0 ? '+' : ''}{formatUsd(p.pnl_usd || 0)}
                     </span>
                   </td>
-                  {version === 'v2' && <td className="px-4 py-3 text-right">
+                  {(version === 'v2' || version === 'v7' || version === 'v9') && <td className="px-4 py-3 text-right">
                     <span className={cn("font-mono text-xs", (p.pnl_realized || 0) >= 0 ? "text-green-400/70" : "text-red-400/70")}>
                       {(p.pnl_realized || 0) >= 0 ? '+' : ''}{formatUsd(p.pnl_realized || 0)}
                     </span>
@@ -313,20 +701,44 @@ export default function PortfolioPageClient() {
                     <span className="text-red-400/80 font-mono text-xs">{formatPrice(p.sl_price)}</span>
                     <br /><span className="text-[10px] text-gray-600">{p.sl_reason}</span>
                   </td>
-                  {version === 'v1' && <td className="px-4 py-3 text-right">
+                  {(version === 'v1' || version === 'v6' || version === 'v8') && <td className="px-4 py-3 text-right">
                     <span className="text-green-400/80 font-mono text-xs">{formatPrice(p.tp_price)}</span>
-                    <br /><span className="text-[10px] text-gray-600">{p.tp_reason}</span>
+                    <br /><span className="text-[10px] text-gray-600">{p.tp_reason || (version === 'v6' ? '+15%' : '')}</span>
                   </td>}
-                  {version === 'v2' && <td className="px-4 py-3 text-center">
+                  {(version === 'v2' || version === 'v7' || version === 'v9') && <td className="px-4 py-3 text-center">
                     {p.tp1_hit ? <span className="text-green-400 text-xs font-bold">✅ +10%</span> : <span className="text-gray-600 text-xs">{formatPrice(p.tp1_price || 0)}</span>}
                   </td>}
-                  {version === 'v2' && <td className="px-4 py-3 text-center">
+                  {(version === 'v2' || version === 'v7' || version === 'v9') && <td className="px-4 py-3 text-center">
                     {p.tp2_hit ? <span className="text-green-400 text-xs font-bold">✅ +20%</span> : <span className="text-gray-600 text-xs">{formatPrice(p.tp2_price || 0)}</span>}
                   </td>}
-                  {version === 'v2' && <td className="px-4 py-3 text-center">
+                  {(version === 'v2' || version === 'v7' || version === 'v9') && <td className="px-4 py-3 text-center">
                     {p.trailing_active ? <span className="text-purple-400 text-xs font-bold">🔄 ON</span> : <span className="text-gray-700 text-xs">—</span>}
                   </td>}
                   <td className="px-4 py-3 text-gray-400 text-xs">{toGMT1(p.opened_at)}</td>
+                  <td className="px-3 py-3 text-center">
+                    {(() => {
+                      const timeoutH = (version === 'v7' || version === 'v9') ? 72 : (version === 'v6' || version === 'v8') ? 48 : version === 'v5' ? 168 : version === 'v4' ? 168 : version === 'v3' ? 168 : version === 'v2' ? 168 : 168
+                      const opened = new Date(p.opened_at)
+                      const now = new Date()
+                      const elapsedH = (now.getTime() - opened.getTime()) / 3600000
+                      const remainH = Math.max(0, timeoutH - elapsedH)
+                      const pct = Math.min(100, elapsedH / timeoutH * 100)
+                      const elD = Math.floor(elapsedH / 24); const elH = Math.floor(elapsedH % 24)
+                      const remD = Math.floor(remainH / 24); const remH = Math.floor(remainH % 24)
+                      const urgentColor = remainH <= 6 ? 'text-red-400' : remainH <= 12 ? 'text-orange-400' : remainH <= 24 ? 'text-yellow-400' : 'text-gray-400'
+                      return (
+                        <div className="space-y-0.5">
+                          <div className="text-[10px] text-gray-500">{elD > 0 ? `${elD}j ${elH}h` : `${elH}h`}</div>
+                          <div className="w-full h-1 bg-gray-800 rounded-full overflow-hidden">
+                            <div className={cn("h-full rounded-full", pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-orange-500' : pct >= 50 ? 'bg-yellow-500' : 'bg-green-500')} style={{width: `${pct}%`}} />
+                          </div>
+                          <div className={cn("text-[10px] font-medium", urgentColor)}>
+                            {remainH <= 0 ? '⏰ EXPIRED' : remD > 0 ? `${remD}j ${remH}h` : `${remH}h`}
+                          </div>
+                        </div>
+                      )
+                    })()}
+                  </td>
                   {version === 'v1' && <td className="px-4 py-3 text-center">
                     <button
                       onClick={() => handleClose(p.id)}
@@ -338,8 +750,8 @@ export default function PortfolioPageClient() {
                   </td>}
                 </tr>
               ))}
-              {positions.length === 0 && (
-                <tr><td colSpan={12} className="px-4 py-12 text-center text-gray-500">Aucune position ouverte — OpenClaw attend des signaux BUY</td></tr>
+              {filteredPositions.length === 0 && (
+                <tr><td colSpan={14} className="px-4 py-12 text-center text-gray-500">{positions.length === 0 ? 'Aucune position ouverte — OpenClaw attend des signaux BUY' : 'Aucune position ne correspond aux filtres'}</td></tr>
               )}
             </tbody>
           </table>
@@ -365,9 +777,14 @@ export default function PortfolioPageClient() {
               </tr>
             </thead>
             <tbody>
-              {history.map(p => (
-                <tr key={p.id} className="border-b border-gray-800/50 hover:bg-gray-800/40">
-                  <td className="px-4 py-3 font-medium text-gray-200">{p.pair.replace('USDT', '')}<span className="text-gray-600">USDT</span></td>
+              {filteredHistory.map(p => {
+                const isPartial = (p as any)._partial
+                return (
+                <tr key={p.id} className={cn("border-b border-gray-800/50 hover:bg-gray-800/40", isPartial && "bg-purple-500/5 border-l-2 border-l-purple-500")}>
+                  <td className="px-4 py-3 font-medium text-gray-200">
+                    {p.pair.replace('USDT', '')}<span className="text-gray-600">USDT</span>
+                    {isPartial && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 font-medium">{isPartial}</span>}
+                  </td>
                   <td className="px-4 py-3 text-center">
                     {p.is_high_ticket ? <span title={`VIP ${p.vip_score}/5 — High Ticket`} className="text-base cursor-help">🏆</span>
                       : p.is_vip ? <span title={`VIP ${p.vip_score}/5`} className="text-base cursor-help">⭐</span>
@@ -381,14 +798,20 @@ export default function PortfolioPageClient() {
                     ) : <span className="text-gray-700 text-xs">—</span>}
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium",
-                      (p.pnl_pct || 0) >= 0 ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"
-                    )}>
-                      {(p.pnl_pct || 0) >= 0 ? '✅ WIN' : '❌ LOSE'}
-                    </span>
+                    {isPartial ? (
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-500/15 text-purple-400">
+                        🎯 {isPartial === 'TP1' ? '50% vendu' : '30% vendu'}
+                      </span>
+                    ) : (
+                      <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium",
+                        (p.pnl_pct || 0) >= 0 ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"
+                      )}>
+                        {(p.pnl_pct || 0) >= 0 ? '✅ WIN' : '❌ LOSE'}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <span className={cn("font-mono font-bold", (p.pnl_pct || 0) >= 0 ? "text-green-400" : "text-red-400")}>
+                    <span className={cn("font-mono font-bold", isPartial ? "text-purple-400" : (p.pnl_pct || 0) >= 0 ? "text-green-400" : "text-red-400")}>
                       {(p.pnl_pct || 0) >= 0 ? '+' : ''}{(p.pnl_pct || 0).toFixed(2)}%
                     </span>
                     <br />
@@ -398,14 +821,19 @@ export default function PortfolioPageClient() {
                   <td className="px-4 py-3 text-right text-gray-300 font-mono text-xs">{formatPrice(p.exit_price || 0)}</td>
                   <td className="px-4 py-3 text-right text-gray-400">{formatUsd(p.size_usd)}</td>
                   <td className="px-4 py-3 text-center">
-                    <span className="text-xs text-gray-500">{p.close_reason || '—'}</span>
+                    {isPartial ? (
+                      <span className="text-xs font-medium text-purple-400">{isPartial === 'TP1' ? 'TP1 +10%' : 'TP2 +20%'}</span>
+                    ) : (
+                      <span className="text-xs text-gray-500">{p.close_reason || '—'}</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-gray-400 text-xs">{toGMT1(p.opened_at)}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{toGMT1(p.closed_at || '')}</td>
+                  <td className="px-4 py-3 text-gray-400 text-xs">{isPartial ? <span className="text-purple-400/60">en cours</span> : toGMT1(p.closed_at || '')}</td>
                 </tr>
-              ))}
-              {history.length === 0 && (
-                <tr><td colSpan={11} className="px-4 py-12 text-center text-gray-500">Aucun trade cloture — les positions sont encore ouvertes</td></tr>
+                )
+              })}
+              {filteredHistory.length === 0 && (
+                <tr><td colSpan={11} className="px-4 py-12 text-center text-gray-500">{history.length === 0 ? 'Aucun trade cloture — les positions sont encore ouvertes' : 'Aucun trade ne correspond aux filtres'}</td></tr>
               )}
             </tbody>
           </table>
@@ -413,7 +841,7 @@ export default function PortfolioPageClient() {
       )}
 
       {tab === 'stats' && (
-        <StatsTab history={history} initialCapital={s.initial_capital} />
+        <StatsTab history={filteredHistory} initialCapital={s.initial_capital} />
       )}
     </div>
   )

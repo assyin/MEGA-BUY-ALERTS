@@ -128,6 +128,7 @@ class OutcomeTracker:
             pnl_max = max(pnl, prev_pnl_max)
             pnl_min = min(pnl, prev_pnl_min)
             highest_price = max(current_price, prev_highest)
+            new_max_hit = pnl_max > prev_pnl_max + 0.1  # New ATH reached
 
             # Calculate time since alert
             ts = pattern.get("timestamp", "")
@@ -165,10 +166,12 @@ class OutcomeTracker:
                     "pnl_min": round(pnl_min, 2),
                     "highest_price": round(highest_price, 8),
                 }
+                if new_max_hit:
+                    extra["pnl_max_at"] = now.isoformat()
                 if outcome:
                     update_data["outcome"] = outcome
                     update_data["outcome_at"] = now.isoformat()
-                    extra["pnl_at_close"] = round(pnl, 2)  # FROZEN at decision time
+                    extra["pnl_at_close"] = round(pnl, 2)
 
                 target = record_id or alert_id
                 key = "id" if record_id else "alert_id"
@@ -194,6 +197,48 @@ class OutcomeTracker:
 
         if updated > 0:
             print(f"📊 OutcomeTracker: {updated} PnL updated, {wins} WIN, {losses} LOSE ({len(pending)} total pending)")
+
+        # Update pnl_max and highest_price for ALL resolved trades (WIN + LOSE)
+        try:
+            from datetime import timedelta as _td
+            since = (now - _td(days=14)).isoformat()
+            resolved = sb.table("agent_memory") \
+                .select("id,pair,pnl_max,highest_price,features_fingerprint") \
+                .in_("outcome", ["WIN", "LOSE"]) \
+                .gte("timestamp", since) \
+                .limit(1000) \
+                .execute()
+            resolved_data = resolved.data or []
+            resolved_updated = 0
+            for r in resolved_data:
+                pair = r.get("pair", "")
+                if pair not in prices:
+                    continue
+                fp = r.get("features_fingerprint") or {}
+                entry = fp.get("price", 0)
+                if not entry:
+                    continue
+                cp = prices[pair]
+                pnl_live = (cp - entry) / entry * 100
+                prev_max = r.get("pnl_max") or 0
+                prev_high = r.get("highest_price") or 0
+                new_max = max(pnl_live, prev_max)
+                new_high = max(cp, prev_high)
+                if new_max > prev_max + 0.1:
+                    try:
+                        sb.table("agent_memory").update({
+                            "pnl_pct": round(pnl_live, 2),
+                            "pnl_max": round(new_max, 2),
+                            "highest_price": round(new_high, 8),
+                            "pnl_max_at": now.isoformat(),
+                        }).eq("id", r["id"]).execute()
+                        resolved_updated += 1
+                    except:
+                        pass
+            if resolved_updated > 0:
+                print(f"📊 OutcomeTracker: {resolved_updated} resolved trades max-PnL updated")
+        except Exception as e:
+            pass  # Silent fail — non-critical
 
         # Daily/weekly resets
         if now.hour == 0 and now.minute < 35:

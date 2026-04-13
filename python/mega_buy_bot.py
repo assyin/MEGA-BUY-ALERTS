@@ -46,8 +46,8 @@ except Exception as e:
 # ═══════════════════════════════════════════════════════
 # ⚙️ CONFIGURATION — MODIFIER ICI
 # ═══════════════════════════════════════════════════════
-TELEGRAM_TOKEN = "COLLE_TON_TOKEN_ICI"
-TELEGRAM_CHAT_ID = "COLLE_TON_CHAT_ID_ICI"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "COLLE_TON_TOKEN_ICI")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "COLLE_TON_CHAT_ID_ICI")
 
 # Google Sheets — Logging des alertes
 GOOGLE_SHEETS_ENABLED = True
@@ -55,7 +55,7 @@ GOOGLE_SHEET_NAME = "MEGA BUY Alerts"              # Nom du Google Sheet
 GOOGLE_CREDS_FILE = "google_creds.json"             # Fichier credentials Service Account
 
 TIMEFRAMES = ["15m", "30m", "1h", "4h"]   # Multi-TF scan
-SCAN_INTERVAL_MIN = 15                     # 15 min (plus petit TF)
+SCAN_INTERVAL_MIN = 7                      # 7 min (2x per 15m candle for faster detection)
 MIN_VOLUME_USDT = 500_000
 
 # ═══════════════════════════════════════════════════════
@@ -611,6 +611,7 @@ def push_alerts_to_supabase(sorted_signals, candle_key):
 
     now_ts = datetime.now(timezone.utc).isoformat()
 
+    filtered_out = 0
     for symbol, tf_results in sorted_signals:
         try:
             # Get best score across all TFs
@@ -622,6 +623,21 @@ def push_alerts_to_supabase(sorted_signals, candle_key):
             best_tf_key = max(tf_results.keys(), key=lambda t: (tf_results[t]["score"], tf_priority.get(t, 0)))
             first_tf = tf_results[best_tf_key]
             conditions = first_tf.get("conditions", {})
+
+            # Pre-filter: skip dead candles (no real movement)
+            # Fetch current 4H candle body to check if there's actual movement
+            try:
+                _r4h = requests.get("https://api.binance.com/api/v3/klines",
+                    params={"symbol": symbol, "interval": "4h", "limit": 1}, timeout=5)
+                _k4h = _r4h.json()
+                if _k4h and isinstance(_k4h, list) and len(_k4h) > 0:
+                    _o4h, _c4h = float(_k4h[0][1]), float(_k4h[0][4])
+                    _body4h = abs(_c4h - _o4h) / _o4h * 100 if _o4h > 0 else 0
+                    if _body4h < 1.0:
+                        filtered_out += 1
+                        continue  # Skip dead candle — body < 1%
+            except:
+                pass
 
             # Build alert record matching Supabase schema
             # Convert numpy types to native Python types for JSON
@@ -701,6 +717,9 @@ def push_alerts_to_supabase(sorted_signals, candle_key):
 
         except Exception as e:
             print(f"  ⚠️ Supabase push error for {symbol}: {e}")
+
+    if filtered_out > 0:
+        print(f"  🚫 Pre-filtered {filtered_out} dead candles (body 4H < 1%)")
 
 
 # ═══════════════════════════════════════════════════════
