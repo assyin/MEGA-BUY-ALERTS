@@ -101,6 +101,7 @@ export default function OpenClawPageClient() {
     { key: 'di_minus', label: 'DI-', default: true },
     { key: 'adx', label: 'ADX', default: true },
     { key: 'di_spread', label: 'D±', default: true },
+    { key: 'adx_minus_dim', label: 'A−D−', default: true },
     { key: 'rsi', label: 'RSI', default: true },
     { key: 'change24h', label: '24h%', default: true },
     { key: 'body4h', label: 'Body', default: true },
@@ -126,9 +127,35 @@ export default function OpenClawPageClient() {
     { key: 'pnl', label: 'PnL', default: true },
     { key: 'pnl_max', label: 'Max', default: true },
     { key: 'tv', label: 'TV', default: false },
+    // ─── Tier 3 — analyse OpenClaw (default off, opt-in via column picker) ───
+    { key: 'prog', label: 'Prog', default: false },
+    { key: 'bonus_n', label: 'Bonus', default: false },
+    { key: 'fib4h', label: 'Fib4H', default: false },
+    { key: 'fib1h', label: 'Fib1H', default: false },
+    { key: 'vp4h', label: 'VP4H', default: false },
+    { key: 'vp1h', label: 'VP1H', default: false },
+    { key: 'ob4h', label: 'OB4H', default: false },
+    { key: 'ob1h', label: 'OB1H', default: false },
+    { key: 'macd4h', label: 'MACD4', default: false },
+    { key: 'macd1h', label: 'MACD1', default: false },
+    { key: 'stoch4h', label: 'Stoch4', default: false },
+    { key: 'stoch1h', label: 'Stoch1', default: false },
+    { key: 'ema_st4h', label: 'EMS4', default: false },
+    { key: 'ema_st1h', label: 'EMS1', default: false },
+    { key: 'bb4h', label: 'BB4', default: false },
+    { key: 'fvg4h', label: 'FVG4', default: false },
+    { key: 'adx1h', label: 'ADX1', default: false },
+    { key: 'rsi_mtf', label: 'RsiMtf', default: false },
+    { key: 'ml', label: 'ML', default: false },
   ] as const
   const [visibleCols, setVisibleCols] = useState<Set<string>>(() => new Set(ALL_COLUMNS.filter(c => c.default).map(c => c.key)))
   const [showColPicker, setShowColPicker] = useState(false)
+  // View presets — quick switch between predefined column sets
+  const VIEW_CLASSIC = ALL_COLUMNS.filter(c => c.default).map(c => c.key)
+  const VIEW_OPENCLAW = ['date', 'pair', 'vip', 'score', 'decision', 'confidence', 'outcome', 'pnl', 'pnl_max',
+                         'prog', 'bonus_n', 'fib4h', 'vp4h', 'ob4h', 'macd4h', 'stoch4h', 'ema_st4h',
+                         'bb4h', 'fvg4h', 'adx1h', 'rsi_mtf', 'ml']
+  const setsEqual = (a: Set<string>, b: string[]) => a.size === b.length && b.every(k => a.has(k))
   const col = (key: string) => visibleCols.has(key)
   const toggleCol = (key: string) => setVisibleCols(prev => { const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s })
 
@@ -143,6 +170,94 @@ export default function OpenClawPageClient() {
   const [decisionFilter, setDecisionFilter] = useState<string>('ALL')
   const [outcomeFilter, setOutcomeFilter] = useState<string>('ALL')
   const [vipFilter, setVipFilter] = useState<string>('ALL') // ALL, VIP, HIGH_TICKET, NO_VIP
+  const [v4GateFilter, setV4GateFilter] = useState<string>('ALL') // ALL, PASS, REJECT
+  // V4 gate config (editable — defaults match actual V4 strategy)
+  const [v4MinScore, setV4MinScore] = useState<number>(8)
+  const [v4AllowVip, setV4AllowVip] = useState<boolean>(true)
+  const [v4AllowHt, setV4AllowHt] = useState<boolean>(true)
+  const [v4AllowNoVip, setV4AllowNoVip] = useState<boolean>(false)
+  const [v4CandleDir, setV4CandleDir] = useState<'green' | 'red' | 'any'>('green')
+
+  // ─── Tier 1 — features_fingerprint based ───
+  // Body % per TF
+  const [minBody15m, setMinBody15m] = useState(''); const [maxBody15m, setMaxBody15m] = useState('')
+  const [minBody30m, setMinBody30m] = useState(''); const [maxBody30m, setMaxBody30m] = useState('')
+  const [minBody1h, setMinBody1h] = useState(''); const [maxBody1h, setMaxBody1h] = useState('')
+  // Range % per TF
+  const [minRange15m, setMinRange15m] = useState(''); const [maxRange15m, setMaxRange15m] = useState('')
+  const [minRange30m, setMinRange30m] = useState(''); const [maxRange30m, setMaxRange30m] = useState('')
+  const [minRange1h, setMinRange1h] = useState(''); const [maxRange1h, setMaxRange1h] = useState('')
+  // Direction per TF (15m, 30m, 1h)
+  const [dir15m, setDir15m] = useState<'ALL' | 'green' | 'red'>('ALL')
+  const [dir30m, setDir30m] = useState<'ALL' | 'green' | 'red'>('ALL')
+  const [dir1h, setDir1h] = useState<'ALL' | 'green' | 'red'>('ALL')
+  // BTC dominance / ETH dominance / Others.D
+  const [minBtcDom, setMinBtcDom] = useState(''); const [maxBtcDom, setMaxBtcDom] = useState('')
+  const [minEthDom, setMinEthDom] = useState(''); const [maxEthDom, setMaxEthDom] = useState('')
+  const [minOthersD, setMinOthersD] = useState(''); const [maxOthersD, setMaxOthersD] = useState('')
+  // BTC / ETH 24h change
+  const [minBtc24h, setMinBtc24h] = useState(''); const [maxBtc24h, setMaxBtc24h] = useState('')
+  const [minEth24h, setMinEth24h] = useState(''); const [maxEth24h, setMaxEth24h] = useState('')
+  // Volume USDT min
+  const [minVolUsdt, setMinVolUsdt] = useState('')
+  // Accumulation hours
+  const [minAccumH, setMinAccumH] = useState(''); const [maxAccumH, setMaxAccumH] = useState('')
+  // Quality axes count
+  const [minQualityAxes, setMinQualityAxes] = useState('')
+  // BTC season / ETH season toggles
+  const [btcSeasonFilter, setBtcSeasonFilter] = useState<'ALL' | 'YES' | 'NO'>('ALL')
+  const [ethSeasonFilter, setEthSeasonFilter] = useState<'ALL' | 'YES' | 'NO'>('ALL')
+
+  // ─── Tier 2 — alerts table based ───
+  // LazyBar 4H color
+  const [lazy4hFilter, setLazy4hFilter] = useState<string[]>([]) // empty=ALL, can contain 'Red','Yellow','Green','Navy'
+  // DMI cross 4H
+  const [dmiCross4hFilter, setDmiCross4hFilter] = useState<'ALL' | 'YES' | 'NO'>('ALL')
+  // Bougie 4H validation
+  const [bougie4hFilter, setBougie4hFilter] = useState<'ALL' | 'YES' | 'NO'>('ALL')
+  // Emotion
+  const [emotionFilter, setEmotionFilter] = useState<string[]>([]) // empty=ALL, can contain 'STRONG','NEUTRAL','WEAK'
+  // RSI moves min per TF (15m/30m/1h/4h)
+  const [minRsiMv15m, setMinRsiMv15m] = useState(''); const [minRsiMv1h, setMinRsiMv1h] = useState(''); const [minRsiMv4h, setMinRsiMv4h] = useState('')
+  // DI+ moves min per TF
+  const [minDiPMv15m, setMinDiPMv15m] = useState(''); const [minDiPMv1h, setMinDiPMv1h] = useState(''); const [minDiPMv4h, setMinDiPMv4h] = useState('')
+  // EC moves min per TF
+  const [minEcMv15m, setMinEcMv15m] = useState(''); const [minEcMv1h, setMinEcMv1h] = useState(''); const [minEcMv4h, setMinEcMv4h] = useState('')
+  // Max profit potentiel
+  const [minMaxProfit, setMinMaxProfit] = useState(''); const [maxMaxProfit, setMaxMaxProfit] = useState('')
+  // LazyBar color per TF (15m, 30m, 1h)
+  const [lazy15mFilter, setLazy15mFilter] = useState<string[]>([])
+  const [lazy30mFilter, setLazy30mFilter] = useState<string[]>([])
+  const [lazy1hFilter, setLazy1hFilter] = useState<string[]>([])
+
+  // ─── Tier 3 — analyze_alert structured indicators ───
+  const [minProgCount, setMinProgCount] = useState('')         // 0-5 effective
+  const [minBonusCount, setMinBonusCount] = useState('')       // 0-23
+  const [fib4hF, setFib4hF] = useState<'ALL'|'YES'|'NO'>('ALL')
+  const [fib1hF, setFib1hF] = useState<'ALL'|'YES'|'NO'>('ALL')
+  const [vpPos1h, setVpPos1h] = useState<string[]>([])         // IN_VA, ABOVE_VAH, BELOW_VAL
+  const [vpPos4h, setVpPos4h] = useState<string[]>([])
+  const [obPos1h, setObPos1h] = useState<string[]>([])         // ABOVE, INSIDE, BELOW
+  const [obPos4h, setObPos4h] = useState<string[]>([])
+  const [obStrength1h, setObStrength1h] = useState<string[]>([]) // STRONG, MEDIUM, WEAK
+  const [obStrength4h, setObStrength4h] = useState<string[]>([])
+  const [obMitig1h, setObMitig1h] = useState<'ALL'|'YES'|'NO'>('ALL')
+  const [obMitig4h, setObMitig4h] = useState<'ALL'|'YES'|'NO'>('ALL')
+  const [fvgPos1h, setFvgPos1h] = useState<string[]>([])
+  const [fvgPos4h, setFvgPos4h] = useState<string[]>([])
+  const [macd1hTrend, setMacd1hTrend] = useState<string[]>([]) // BULLISH, BEARISH
+  const [macd4hTrend, setMacd4hTrend] = useState<string[]>([])
+  const [macd1hGrow, setMacd1hGrow] = useState<'ALL'|'YES'|'NO'>('ALL')
+  const [macd4hGrow, setMacd4hGrow] = useState<'ALL'|'YES'|'NO'>('ALL')
+  const [bb1hSqueeze, setBb1hSqueeze] = useState<'ALL'|'YES'|'NO'>('ALL')
+  const [bb4hSqueeze, setBb4hSqueeze] = useState<'ALL'|'YES'|'NO'>('ALL')
+  const [stoch1hZone, setStoch1hZone] = useState<string[]>([]) // OVERSOLD, NEUTRAL, OVERBOUGHT
+  const [stoch4hZone, setStoch4hZone] = useState<string[]>([])
+  const [minEmaStack1h, setMinEmaStack1h] = useState('')        // 0-4
+  const [minEmaStack4h, setMinEmaStack4h] = useState('')
+  const [minAdx1h, setMinAdx1h] = useState(''); const [maxAdx1h, setMaxAdx1h] = useState('')
+  const [minRsiMtf, setMinRsiMtf] = useState('')                // 0-3
+  const [minMlScore, setMinMlScore] = useState('')              // 0-1
   const [usage, setUsage] = useState<UsageSummary | null>(null)
   const [timing, setTiming] = useState<TimingData | null>(null)
 
@@ -190,13 +305,25 @@ export default function OpenClawPageClient() {
   const [minVol4h, setMinVol4h] = useState('')
   const [minVol24h, setMinVol24h] = useState('')
   const [minVol48h, setMinVol48h] = useState('')
+  const [maxVol1h, setMaxVol1h] = useState('')
+  const [maxVol4h, setMaxVol4h] = useState('')
+  const [maxVol24h, setMaxVol24h] = useState('')
+  const [maxVol48h, setMaxVol48h] = useState('')
+  const [excludeAllRedVol, setExcludeAllRedVol] = useState(false)
+  const [excludeGrayIndicators, setExcludeGrayIndicators] = useState(false)
   // DI Spread filter
   const [minDiSpread, setMinDiSpread] = useState('')
   const [maxDiSpread, setMaxDiSpread] = useState('')
+  // ADX - DI- filter
+  const [minAdxDim, setMinAdxDim] = useState('')
+  const [maxAdxDim, setMaxAdxDim] = useState('')
   // STC filters
   const [maxStc15m, setMaxStc15m] = useState('')
   const [maxStc30m, setMaxStc30m] = useState('')
   const [maxStc1h, setMaxStc1h] = useState('')
+  const [minStc15m, setMinStc15m] = useState('')
+  const [minStc30m, setMinStc30m] = useState('')
+  const [minStc1h, setMinStc1h] = useState('')
   // TF body filter
   const [minTfBody, setMinTfBody] = useState('')
   // V8/V9 All preset (union of Ultra + Vol bypass)
@@ -223,8 +350,8 @@ export default function OpenClawPageClient() {
     else setLoading(true)
 
     try {
-      // Load agent_memory — always last 30 days, paginated
-      const since30d = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+      // Load agent_memory — last 14 days by default (use date picker for older)
+      const since30d = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10)
       const fields = "id,pair,agent_decision,agent_confidence,outcome,pnl_pct,pnl_max,pnl_min,pnl_at_close,timestamp,alert_id,scanner_score,features_fingerprint,outcome_at,pnl_max_at"
       let allRows: any[] = []
       let page = 0
@@ -249,13 +376,19 @@ export default function OpenClawPageClient() {
         const alertIds = data.filter(d => d.alert_id).map(d => d.alert_id!)
         let alertsMap: Record<string, any> = {}
         if (alertIds.length > 0) {
-          // Batch load in chunks of 100
-          for (let i = 0; i < alertIds.length; i += 100) {
-            const chunk = alertIds.slice(i, i + 100)
-            const { data: alertData } = await supabase
+          // Batch load in parallel chunks (was sequential — 37x slower)
+          const CHUNK = 300
+          const chunks: string[][] = []
+          for (let i = 0; i < alertIds.length; i += CHUNK) {
+            chunks.push(alertIds.slice(i, i + CHUNK))
+          }
+          const results = await Promise.all(chunks.map(chunk =>
+            supabase
               .from("alerts")
-              .select("id,alert_timestamp,rsi_check,dmi_check,ast_check,choch,zone,lazy,vol,st,puissance,vol_pct,lazy_values,ec_moves,emotion,rsi_moves,nb_timeframes")
+              .select("id,alert_timestamp,rsi_check,dmi_check,ast_check,choch,zone,lazy,vol,st,puissance,vol_pct,lazy_values,lazy_moves,ec_moves,emotion,rsi_moves,di_plus_moves,di_minus_moves,adx_moves,nb_timeframes,lazy_4h,bougie_4h,dmi_cross_4h,max_profit_pct,max_profit_hours,body_4h,range_4h")
               .in("id", chunk)
+          ))
+          for (const { data: alertData } of results) {
             if (alertData) {
               for (const a of alertData) {
                 alertsMap[a.id] = a
@@ -271,15 +404,21 @@ export default function OpenClawPageClient() {
         setDecisions(enriched)
       }
 
-      // Load usage from OpenClaw API via server-side proxy to avoid CORS
-      try {
-        const [usageRes, timingRes] = await Promise.all([
-          fetch('/api/openclaw/usage').then(r => r.ok ? r.json() : null).catch(() => null),
-          fetch('/api/openclaw/timing').then(r => r.ok ? r.json() : null).catch(() => null),
-        ])
-        if (usageRes) setUsage(usageRes)
-        if (timingRes) setTiming(timingRes)
-      } catch {}
+      // Load usage/timing in background — don't block the main table render
+      // (these endpoints can take minutes when the openclaw backend is busy)
+      const timeoutFetch = async (url: string, ms: number) => {
+        try {
+          const res = await Promise.race([
+            fetch(url).then(r => r.ok ? r.json() : null).catch(() => null),
+            new Promise<null>(resolve => setTimeout(() => resolve(null), ms)),
+          ])
+          return res
+        } catch {
+          return null
+        }
+      }
+      timeoutFetch('/api/openclaw/usage', 8000).then(u => { if (u) setUsage(u) }).catch(() => {})
+      timeoutFetch('/api/openclaw/timing', 8000).then(t => { if (t) setTiming(t) }).catch(() => {})
     } catch (e) {
       console.error('Load error:', e)
     } finally {
@@ -344,6 +483,26 @@ export default function OpenClawPageClient() {
         if (vipFilter === 'VIP' && !fp.is_vip) return false
         if (vipFilter === 'HIGH_TICKET' && !fp.is_high_ticket) return false
         if (vipFilter === 'NO_VIP' && fp.is_vip) return false
+      }
+      // V4 Gate filter — fully configurable from the UI
+      if (v4GateFilter !== 'ALL') {
+        const fpv4 = d.features_fingerprint || {}
+        const score = d.scanner_score || 0
+        const isVip = fpv4.is_vip === true
+        const isHt = fpv4.is_high_ticket === true
+        const isNoVip = !isVip && !isHt
+        // 1) score gate
+        let passes = score >= v4MinScore
+        // 2) VIP gate — at least one allowed bucket must match
+        if (passes) {
+          passes = (v4AllowVip && isVip) || (v4AllowHt && isHt) || (v4AllowNoVip && isNoVip)
+        }
+        // 3) candle direction gate
+        if (passes && v4CandleDir !== 'any') {
+          passes = fpv4.candle_4h_direction === v4CandleDir
+        }
+        if (v4GateFilter === 'PASS' && !passes) return false
+        if (v4GateFilter === 'REJECT' && passes) return false
       }
       // DI+/DI-/ADX/RSI filters
       const fp2 = d.features_fingerprint || {}
@@ -438,6 +597,25 @@ export default function OpenClawPageClient() {
       if (minVol4h && (fp2.vol_spike_vs_4h == null || fp2.vol_spike_vs_4h < parseFloat(minVol4h))) return false
       if (minVol24h && (fp2.vol_spike_vs_24h == null || fp2.vol_spike_vs_24h < parseFloat(minVol24h))) return false
       if (minVol48h && (fp2.vol_spike_vs_48h == null || fp2.vol_spike_vs_48h < parseFloat(minVol48h))) return false
+      if (maxVol1h && (fp2.vol_spike_vs_1h == null || fp2.vol_spike_vs_1h > parseFloat(maxVol1h))) return false
+      if (maxVol4h && (fp2.vol_spike_vs_4h == null || fp2.vol_spike_vs_4h > parseFloat(maxVol4h))) return false
+      if (maxVol24h && (fp2.vol_spike_vs_24h == null || fp2.vol_spike_vs_24h > parseFloat(maxVol24h))) return false
+      if (maxVol48h && (fp2.vol_spike_vs_48h == null || fp2.vol_spike_vs_48h > parseFloat(maxVol48h))) return false
+      if (excludeAllRedVol) {
+        const v1 = fp2.vol_spike_vs_1h, v4 = fp2.vol_spike_vs_4h, v24 = fp2.vol_spike_vs_24h, v48 = fp2.vol_spike_vs_48h
+        if (v1 != null && v4 != null && v24 != null && v48 != null && v1 < 0 && v4 < 0 && v24 < 0 && v48 < 0) return false
+      }
+      if (excludeGrayIndicators) {
+        const diP = fp2.di_plus_4h, diM = fp2.di_minus_4h, adxV = fp2.adx_4h, rsiV = fp2.rsi
+        const sp = (diP != null && diM != null) ? diP - diM : null
+        let grayCount = 0
+        if (diP != null && diP < 30) grayCount++
+        if (diM != null && diM > 15 && diM < 25) grayCount++
+        if (adxV != null && adxV < 25) grayCount++
+        if (sp != null && !(sp >= 5 && sp <= 15) && !(sp >= 40) && !(sp < 0)) grayCount++
+        if (rsiV != null && rsiV > 30 && rsiV < 70) grayCount++
+        if (grayCount >= 4) return false
+      }
       // TF body filter — get the max body across alert TFs
       if (minTfBody) {
         const tfs2 = fp2.timeframes || []
@@ -448,6 +626,9 @@ export default function OpenClawPageClient() {
       if (maxStc15m && (fp2.stc_15m == null || fp2.stc_15m > parseFloat(maxStc15m))) return false
       if (maxStc30m && (fp2.stc_30m == null || fp2.stc_30m > parseFloat(maxStc30m))) return false
       if (maxStc1h && (fp2.stc_1h == null || fp2.stc_1h > parseFloat(maxStc1h))) return false
+      if (minStc15m && (fp2.stc_15m == null || fp2.stc_15m < parseFloat(minStc15m))) return false
+      if (minStc30m && (fp2.stc_30m == null || fp2.stc_30m < parseFloat(minStc30m))) return false
+      if (minStc1h && (fp2.stc_1h == null || fp2.stc_1h < parseFloat(minStc1h))) return false
       // DI Spread filter (DI+ - DI-)
       if (minDiSpread || maxDiSpread) {
         const diP = fp2.di_plus_4h; const diM = fp2.di_minus_4h
@@ -456,6 +637,168 @@ export default function OpenClawPageClient() {
         if (minDiSpread && spread < parseFloat(minDiSpread)) return false
         if (maxDiSpread && spread > parseFloat(maxDiSpread)) return false
       }
+      if (minAdxDim || maxAdxDim) {
+        const adxV = fp2.adx_4h; const diM = fp2.di_minus_4h
+        if (adxV != null && diM != null) {
+          // Compare on rounded value to match what's displayed in the table
+          const adxDim = Math.round(adxV - diM)
+          if (minAdxDim && adxDim < parseFloat(minAdxDim)) return false
+          if (maxAdxDim && adxDim > parseFloat(maxAdxDim)) return false
+        }
+      }
+      // ─────── Tier 1+2 — new filters ───────
+      const fpx = d.features_fingerprint || {}
+      const adx = (d as any).alert_data || {}
+
+      // Body % per TF (15m/30m/1h)
+      const bodyChecks: [any, any, any][] = [
+        [fpx.candle_15m_body_pct, minBody15m, maxBody15m],
+        [fpx.candle_30m_body_pct, minBody30m, maxBody30m],
+        [fpx.candle_1h_body_pct,  minBody1h,  maxBody1h],
+      ]
+      for (const [v, mn, mx] of bodyChecks) {
+        if (mn !== '' && (v == null || v < parseFloat(mn))) return false
+        if (mx !== '' && (v == null || v > parseFloat(mx))) return false
+      }
+      // Range % per TF
+      const rangeChecks: [any, any, any][] = [
+        [fpx.candle_15m_range_pct, minRange15m, maxRange15m],
+        [fpx.candle_30m_range_pct, minRange30m, maxRange30m],
+        [fpx.candle_1h_range_pct,  minRange1h,  maxRange1h],
+      ]
+      for (const [v, mn, mx] of rangeChecks) {
+        if (mn !== '' && (v == null || v < parseFloat(mn))) return false
+        if (mx !== '' && (v == null || v > parseFloat(mx))) return false
+      }
+      // Direction per TF
+      if (dir15m !== 'ALL' && fpx.candle_15m_direction !== dir15m) return false
+      if (dir30m !== 'ALL' && fpx.candle_30m_direction !== dir30m) return false
+      if (dir1h  !== 'ALL' && fpx.candle_1h_direction  !== dir1h)  return false
+
+      // Dominance ranges
+      const domChecks: [any, any, any][] = [
+        [fpx.btc_dominance, minBtcDom, maxBtcDom],
+        [fpx.eth_dominance, minEthDom, maxEthDom],
+        [fpx.others_d,      minOthersD, maxOthersD],
+      ]
+      for (const [v, mn, mx] of domChecks) {
+        if (mn !== '' && (v == null || v < parseFloat(mn))) return false
+        if (mx !== '' && (v == null || v > parseFloat(mx))) return false
+      }
+      // BTC/ETH 24h change
+      const change24Checks: [any, any, any][] = [
+        [fpx.btc_change_24h, minBtc24h, maxBtc24h],
+        [fpx.eth_change_24h, minEth24h, maxEth24h],
+      ]
+      for (const [v, mn, mx] of change24Checks) {
+        if (mn !== '' && (v == null || v < parseFloat(mn))) return false
+        if (mx !== '' && (v == null || v > parseFloat(mx))) return false
+      }
+      // Volume USDT min
+      if (minVolUsdt !== '' && (fpx.volume_usdt == null || fpx.volume_usdt < parseFloat(minVolUsdt))) return false
+      // Accumulation hours
+      if (minAccumH !== '' && (fpx.accumulation_hours == null || fpx.accumulation_hours < parseFloat(minAccumH))) return false
+      if (maxAccumH !== '' && (fpx.accumulation_hours == null || fpx.accumulation_hours > parseFloat(maxAccumH))) return false
+      // Quality axes count
+      if (minQualityAxes !== '' && (fpx.quality_axes == null || fpx.quality_axes < parseInt(minQualityAxes))) return false
+      // BTC season / ETH season
+      if (btcSeasonFilter === 'YES' && !fpx.btc_season) return false
+      if (btcSeasonFilter === 'NO' && fpx.btc_season) return false
+      if (ethSeasonFilter === 'YES' && !fpx.eth_trend_bullish) return false  // proxy
+      if (ethSeasonFilter === 'NO' && fpx.eth_trend_bullish) return false
+
+      // ─── Tier 2 — alerts table ───
+      // LazyBar 4H color
+      if (lazy4hFilter.length > 0) {
+        const lz4h = String(adx.lazy_4h || '').toLowerCase()
+        const want = lazy4hFilter.map(c => c.toLowerCase())
+        if (!want.some(c => lz4h.includes(c))) return false
+      }
+      // DMI cross 4H
+      if (dmiCross4hFilter === 'YES' && !adx.dmi_cross_4h) return false
+      if (dmiCross4hFilter === 'NO' && adx.dmi_cross_4h) return false
+      // Bougie 4H validation
+      if (bougie4hFilter === 'YES' && !adx.bougie_4h) return false
+      if (bougie4hFilter === 'NO' && adx.bougie_4h) return false
+      // Emotion
+      if (emotionFilter.length > 0 && !emotionFilter.includes(String(adx.emotion || '').toUpperCase())) return false
+      // RSI moves min per TF
+      const rsiM = adx.rsi_moves || {}
+      if (minRsiMv15m !== '' && (rsiM['15m'] == null || rsiM['15m'] < parseFloat(minRsiMv15m))) return false
+      if (minRsiMv1h  !== '' && (rsiM['1h']  == null || rsiM['1h']  < parseFloat(minRsiMv1h)))  return false
+      if (minRsiMv4h  !== '' && (rsiM['4h']  == null || rsiM['4h']  < parseFloat(minRsiMv4h)))  return false
+      // DI+ moves min per TF
+      const diPM = adx.di_plus_moves || {}
+      if (minDiPMv15m !== '' && (diPM['15m'] == null || diPM['15m'] < parseFloat(minDiPMv15m))) return false
+      if (minDiPMv1h  !== '' && (diPM['1h']  == null || diPM['1h']  < parseFloat(minDiPMv1h)))  return false
+      if (minDiPMv4h  !== '' && (diPM['4h']  == null || diPM['4h']  < parseFloat(minDiPMv4h)))  return false
+      // EC moves min per TF
+      const ecM = adx.ec_moves || {}
+      if (minEcMv15m !== '' && (ecM['15m'] == null || ecM['15m'] < parseFloat(minEcMv15m))) return false
+      if (minEcMv1h  !== '' && (ecM['1h']  == null || ecM['1h']  < parseFloat(minEcMv1h)))  return false
+      if (minEcMv4h  !== '' && (ecM['4h']  == null || ecM['4h']  < parseFloat(minEcMv4h)))  return false
+      // Max profit potentiel (historic)
+      if (minMaxProfit !== '' && (adx.max_profit_pct == null || adx.max_profit_pct < parseFloat(minMaxProfit))) return false
+      if (maxMaxProfit !== '' && (adx.max_profit_pct == null || adx.max_profit_pct > parseFloat(maxMaxProfit))) return false
+      // LazyBar color per TF
+      const lzVals = adx.lazy_values || {}
+      const lzColorAt = (tf: string): string => {
+        const v = lzVals[tf]
+        if (Array.isArray(v) && v.length >= 2) return String(v[1]).toLowerCase()
+        if (typeof v === 'string') return v.toLowerCase()
+        return ''
+      }
+      if (lazy15mFilter.length > 0) {
+        const c = lzColorAt('15m')
+        if (!lazy15mFilter.map(x => x.toLowerCase()).includes(c)) return false
+      }
+      if (lazy30mFilter.length > 0) {
+        const c = lzColorAt('30m')
+        if (!lazy30mFilter.map(x => x.toLowerCase()).includes(c)) return false
+      }
+      if (lazy1hFilter.length > 0) {
+        const c = lzColorAt('1h')
+        if (!lazy1hFilter.map(x => x.toLowerCase()).includes(c)) return false
+      }
+
+      // ─────── Tier 3 — analyze_alert structured features ───────
+      if (minProgCount !== '' && (fpx.prog_count_effective == null || fpx.prog_count_effective < parseInt(minProgCount))) return false
+      if (minBonusCount !== '' && (fpx.bonus_count == null || fpx.bonus_count < parseInt(minBonusCount))) return false
+      if (fib4hF === 'YES' && !fpx.fib_4h_bonus) return false
+      if (fib4hF === 'NO' && fpx.fib_4h_bonus) return false
+      if (fib1hF === 'YES' && !fpx.fib_1h_bonus) return false
+      if (fib1hF === 'NO' && fpx.fib_1h_bonus) return false
+      if (vpPos1h.length > 0 && !vpPos1h.includes(String(fpx.vp_1h_position || ''))) return false
+      if (vpPos4h.length > 0 && !vpPos4h.includes(String(fpx.vp_4h_position || ''))) return false
+      if (obPos1h.length > 0 && !obPos1h.includes(String(fpx.ob_1h_position || ''))) return false
+      if (obPos4h.length > 0 && !obPos4h.includes(String(fpx.ob_4h_position || ''))) return false
+      if (obStrength1h.length > 0 && !obStrength1h.includes(String(fpx.ob_1h_strength || ''))) return false
+      if (obStrength4h.length > 0 && !obStrength4h.includes(String(fpx.ob_4h_strength || ''))) return false
+      if (obMitig1h === 'YES' && !fpx.ob_1h_mitigated) return false
+      if (obMitig1h === 'NO' && fpx.ob_1h_mitigated) return false
+      if (obMitig4h === 'YES' && !fpx.ob_4h_mitigated) return false
+      if (obMitig4h === 'NO' && fpx.ob_4h_mitigated) return false
+      if (fvgPos1h.length > 0 && !fvgPos1h.includes(String(fpx.fvg_1h_position || ''))) return false
+      if (fvgPos4h.length > 0 && !fvgPos4h.includes(String(fpx.fvg_4h_position || ''))) return false
+      if (macd1hTrend.length > 0 && !macd1hTrend.includes(String(fpx.macd_1h_trend || ''))) return false
+      if (macd4hTrend.length > 0 && !macd4hTrend.includes(String(fpx.macd_4h_trend || ''))) return false
+      if (macd1hGrow === 'YES' && !fpx.macd_1h_growing) return false
+      if (macd1hGrow === 'NO' && fpx.macd_1h_growing) return false
+      if (macd4hGrow === 'YES' && !fpx.macd_4h_growing) return false
+      if (macd4hGrow === 'NO' && fpx.macd_4h_growing) return false
+      if (bb1hSqueeze === 'YES' && !fpx.bb_1h_squeeze) return false
+      if (bb1hSqueeze === 'NO' && fpx.bb_1h_squeeze) return false
+      if (bb4hSqueeze === 'YES' && !fpx.bb_4h_squeeze) return false
+      if (bb4hSqueeze === 'NO' && fpx.bb_4h_squeeze) return false
+      if (stoch1hZone.length > 0 && !stoch1hZone.includes(String(fpx.stochrsi_1h_zone || ''))) return false
+      if (stoch4hZone.length > 0 && !stoch4hZone.includes(String(fpx.stochrsi_4h_zone || ''))) return false
+      if (minEmaStack1h !== '' && (fpx.ema_stack_1h_count == null || fpx.ema_stack_1h_count < parseInt(minEmaStack1h))) return false
+      if (minEmaStack4h !== '' && (fpx.ema_stack_4h_count == null || fpx.ema_stack_4h_count < parseInt(minEmaStack4h))) return false
+      if (minAdx1h !== '' && (fpx.adx_1h == null || fpx.adx_1h < parseFloat(minAdx1h))) return false
+      if (maxAdx1h !== '' && (fpx.adx_1h == null || fpx.adx_1h > parseFloat(maxAdx1h))) return false
+      if (minRsiMtf !== '' && (fpx.rsi_mtf_aligned_count == null || fpx.rsi_mtf_aligned_count < parseInt(minRsiMtf))) return false
+      if (minMlScore !== '' && (fpx.ml_p_success == null || fpx.ml_p_success < parseFloat(minMlScore))) return false
+
       // V8/V9 All mode — union of Ultra (ADX 15-35, DI+<=45) OR Vol bypass (Vol>=200%, ADX 15-40, DI+<=65)
       if (v8v9AllMode) {
         const body = fp2.candle_4h_body_pct ?? 0
@@ -511,6 +854,7 @@ export default function OpenClawPageClient() {
         case 'body4h': va = fp_a.candle_4h_body_pct || 0; vb = fp_b.candle_4h_body_pct || 0; break
         case 'range4h': va = fp_a.candle_4h_range_pct || 0; vb = fp_b.candle_4h_range_pct || 0; break
         case 'di_spread': va = (fp_a.di_plus_4h || 0) - (fp_a.di_minus_4h || 0); vb = (fp_b.di_plus_4h || 0) - (fp_b.di_minus_4h || 0); break
+        case 'adx_minus_dim': va = (fp_a.adx_4h || 0) - (fp_a.di_minus_4h || 0); vb = (fp_b.adx_4h || 0) - (fp_b.di_minus_4h || 0); break
         case 'vol_1h': va = fp_a.vol_spike_vs_1h || 0; vb = fp_b.vol_spike_vs_1h || 0; break
         case 'vol_4h': va = fp_a.vol_spike_vs_4h || 0; vb = fp_b.vol_spike_vs_4h || 0; break
         case 'vol_24h': va = fp_a.vol_spike_vs_24h || 0; vb = fp_b.vol_spike_vs_24h || 0; break
@@ -529,15 +873,103 @@ export default function OpenClawPageClient() {
         case 'ec': va = fp_a.ec ? 1 : 0; vb = fp_b.ec ? 1 : 0; break
         case 'accum': va = fp_a.accumulation_days || 0; vb = fp_b.accumulation_days || 0; break
         case 'grade': va = fp_a.quality_grade === 'A+' ? 4 : fp_a.quality_grade === 'A' ? 3 : fp_a.quality_grade === 'B' ? 2 : fp_a.quality_grade === 'C' ? 1 : 0; vb = fp_b.quality_grade === 'A+' ? 4 : fp_b.quality_grade === 'A' ? 3 : fp_b.quality_grade === 'B' ? 2 : fp_b.quality_grade === 'C' ? 1 : 0; break
-        default: va = a.timestamp || ''; vb = b.timestamp || ''
+        // ─── Tier 3 sort cases ───
+        case 'prog':     va = fp_a.prog_count_effective ?? -1; vb = fp_b.prog_count_effective ?? -1; break
+        case 'bonus_n':  va = fp_a.bonus_count ?? -1;          vb = fp_b.bonus_count ?? -1; break
+        case 'fib4h':    va = fp_a.fib_4h_bonus ? 1 : 0;       vb = fp_b.fib_4h_bonus ? 1 : 0; break
+        case 'fib1h':    va = fp_a.fib_1h_bonus ? 1 : 0;       vb = fp_b.fib_1h_bonus ? 1 : 0; break
+        case 'vp4h': {
+          const m: Record<string, number> = { ABOVE_VAH: 2, IN_VA: 1, BELOW_VAL: 0 }
+          va = m[String(fp_a.vp_4h_position || '')] ?? -1; vb = m[String(fp_b.vp_4h_position || '')] ?? -1; break
+        }
+        case 'vp1h': {
+          const m: Record<string, number> = { ABOVE_VAH: 2, IN_VA: 1, BELOW_VAL: 0 }
+          va = m[String(fp_a.vp_1h_position || '')] ?? -1; vb = m[String(fp_b.vp_1h_position || '')] ?? -1; break
+        }
+        case 'ob4h': {
+          const pos: Record<string, number> = { ABOVE: 3, INSIDE: 2, BELOW: 1 }
+          const str: Record<string, number> = { STRONG: 30, MEDIUM: 20, WEAK: 10 }
+          va = (pos[String(fp_a.ob_4h_position || '')] ?? 0) + (str[String(fp_a.ob_4h_strength || '')] ?? 0)
+          vb = (pos[String(fp_b.ob_4h_position || '')] ?? 0) + (str[String(fp_b.ob_4h_strength || '')] ?? 0)
+          break
+        }
+        case 'ob1h': {
+          const pos: Record<string, number> = { ABOVE: 3, INSIDE: 2, BELOW: 1 }
+          const str: Record<string, number> = { STRONG: 30, MEDIUM: 20, WEAK: 10 }
+          va = (pos[String(fp_a.ob_1h_position || '')] ?? 0) + (str[String(fp_a.ob_1h_strength || '')] ?? 0)
+          vb = (pos[String(fp_b.ob_1h_position || '')] ?? 0) + (str[String(fp_b.ob_1h_strength || '')] ?? 0)
+          break
+        }
+        case 'macd4h':   va = fp_a.macd_4h_trend === 'BULLISH' ? (fp_a.macd_4h_growing ? 2 : 1) : -1
+                         vb = fp_b.macd_4h_trend === 'BULLISH' ? (fp_b.macd_4h_growing ? 2 : 1) : -1; break
+        case 'macd1h':   va = fp_a.macd_1h_trend === 'BULLISH' ? (fp_a.macd_1h_growing ? 2 : 1) : -1
+                         vb = fp_b.macd_1h_trend === 'BULLISH' ? (fp_b.macd_1h_growing ? 2 : 1) : -1; break
+        case 'stoch4h': {
+          const m: Record<string, number> = { OVERSOLD: 2, NEUTRAL: 1, OVERBOUGHT: 0 }
+          va = m[String(fp_a.stochrsi_4h_zone || '')] ?? -1; vb = m[String(fp_b.stochrsi_4h_zone || '')] ?? -1; break
+        }
+        case 'stoch1h': {
+          const m: Record<string, number> = { OVERSOLD: 2, NEUTRAL: 1, OVERBOUGHT: 0 }
+          va = m[String(fp_a.stochrsi_1h_zone || '')] ?? -1; vb = m[String(fp_b.stochrsi_1h_zone || '')] ?? -1; break
+        }
+        case 'ema_st4h': va = fp_a.ema_stack_4h_count ?? -1; vb = fp_b.ema_stack_4h_count ?? -1; break
+        case 'ema_st1h': va = fp_a.ema_stack_1h_count ?? -1; vb = fp_b.ema_stack_1h_count ?? -1; break
+        case 'bb4h':     va = fp_a.bb_4h_squeeze ? 1 : 0; vb = fp_b.bb_4h_squeeze ? 1 : 0; break
+        case 'fvg4h': {
+          const m: Record<string, number> = { ABOVE: 2, INSIDE: 1, BELOW: 0 }
+          va = m[String(fp_a.fvg_4h_position || '')] ?? -1; vb = m[String(fp_b.fvg_4h_position || '')] ?? -1; break
+        }
+        case 'adx1h':    va = fp_a.adx_1h ?? -1; vb = fp_b.adx_1h ?? -1; break
+        case 'rsi_mtf':  va = fp_a.rsi_mtf_aligned_count ?? -1; vb = fp_b.rsi_mtf_aligned_count ?? -1; break
+        case 'ml':       va = fp_a.ml_p_success ?? -1; vb = fp_b.ml_p_success ?? -1; break
+
+        case 'timestamp':
+          va = a.alert_data?.alert_timestamp || a.timestamp || ''
+          vb = b.alert_data?.alert_timestamp || b.timestamp || ''
+          break
+        default: {
+          // Prefer the underlying alert fire time; fallback to decision timestamp.
+          // This keeps backfilled analyses in their real chronological slot.
+          va = a.alert_data?.alert_timestamp || a.timestamp || ''
+          vb = b.alert_data?.alert_timestamp || b.timestamp || ''
+        }
       }
       if (va < vb) return sortDir === 'asc' ? -1 : 1
       if (va > vb) return sortDir === 'asc' ? 1 : -1
-      return 0
+      // Tiebreaker: most recent alert fire time, then id — guarantees newest-first stability
+      const ta = a.alert_data?.alert_timestamp || a.timestamp || ''
+      const tb = b.alert_data?.alert_timestamp || b.timestamp || ''
+      if (ta !== tb) return ta < tb ? 1 : -1
+      const ia = a.id || ''; const ib = b.id || ''
+      return ia < ib ? 1 : ia > ib ? -1 : 0
     })
 
     return result
-  }, [decisions, pairSearch, decisionFilter, outcomeFilter, vipFilter, gradeFilter, dateFrom, dateTo, minConf, maxConf, minPnl, maxPnl, minScore, minAccum, maxAccum, minDiPlus, maxDiPlus, minDiMinus, maxDiMinus, minAdx, maxAdx, minRsi, maxRsi, ppFilter, ecFilter, tfFilter, minPuissance, minVolPct, maxVolPct, condFilters, minChange24h, maxChange24h, minBody4h, maxBody4h, minRange4h, maxRange4h, dirFilter, fgFilter, btcTrendFilter, ethTrendFilter, altSeasonFilter, minVol1h, minVol4h, minVol24h, minVol48h, maxStc15m, maxStc30m, maxStc1h, minTfBody, minDiSpread, maxDiSpread, v8v9AllMode, sortKey, sortDir])
+  }, [decisions, pairSearch, decisionFilter, outcomeFilter, vipFilter, v4GateFilter, v4MinScore, v4AllowVip, v4AllowHt, v4AllowNoVip, v4CandleDir, gradeFilter, dateFrom, dateTo, minConf, maxConf, minPnl, maxPnl, minScore, minAccum, maxAccum, minDiPlus, maxDiPlus, minDiMinus, maxDiMinus, minAdx, maxAdx, minRsi, maxRsi, ppFilter, ecFilter, tfFilter, minPuissance, minVolPct, maxVolPct, condFilters, minChange24h, maxChange24h, minBody4h, maxBody4h, minRange4h, maxRange4h, dirFilter, fgFilter, btcTrendFilter, ethTrendFilter, altSeasonFilter, minVol1h, minVol4h, minVol24h, minVol48h, maxVol1h, maxVol4h, maxVol24h, maxVol48h, excludeAllRedVol, excludeGrayIndicators, maxStc15m, maxStc30m, maxStc1h, minStc15m, minStc30m, minStc1h, minTfBody, minDiSpread, maxDiSpread, minAdxDim, maxAdxDim, v8v9AllMode,
+      // Tier 1+2 new filters
+      minBody15m, maxBody15m, minBody30m, maxBody30m, minBody1h, maxBody1h,
+      minRange15m, maxRange15m, minRange30m, maxRange30m, minRange1h, maxRange1h,
+      dir15m, dir30m, dir1h,
+      minBtcDom, maxBtcDom, minEthDom, maxEthDom, minOthersD, maxOthersD,
+      minBtc24h, maxBtc24h, minEth24h, maxEth24h,
+      minVolUsdt, minAccumH, maxAccumH, minQualityAxes,
+      btcSeasonFilter, ethSeasonFilter,
+      lazy4hFilter, dmiCross4hFilter, bougie4hFilter, emotionFilter,
+      minRsiMv15m, minRsiMv1h, minRsiMv4h,
+      minDiPMv15m, minDiPMv1h, minDiPMv4h,
+      minEcMv15m, minEcMv1h, minEcMv4h,
+      minMaxProfit, maxMaxProfit,
+      lazy15mFilter, lazy30mFilter, lazy1hFilter,
+      // Tier 3 deps
+      minProgCount, minBonusCount, fib4hF, fib1hF,
+      vpPos1h, vpPos4h, obPos1h, obPos4h, obStrength1h, obStrength4h, obMitig1h, obMitig4h,
+      fvgPos1h, fvgPos4h,
+      macd1hTrend, macd4hTrend, macd1hGrow, macd4hGrow,
+      bb1hSqueeze, bb4hSqueeze,
+      stoch1hZone, stoch4hZone,
+      minEmaStack1h, minEmaStack4h,
+      minAdx1h, maxAdx1h, minRsiMtf, minMlScore,
+      sortKey, sortDir])
 
   // ─── Stats ───────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -578,7 +1010,7 @@ export default function OpenClawPageClient() {
   const totalPages = Math.ceil(filtered.length / perPage)
   const paged = filtered.slice((currentPage - 1) * perPage, currentPage * perPage)
 
-  useEffect(() => { setCurrentPage(1) }, [pairSearch, decisionFilter, outcomeFilter, vipFilter])
+  useEffect(() => { setCurrentPage(1) }, [pairSearch, decisionFilter, outcomeFilter, vipFilter, v4GateFilter])
 
   // ─── Render ──────────────────────────────────────────────
   if (loading) {
@@ -726,9 +1158,129 @@ export default function OpenClawPageClient() {
               ))}
             </div>
 
-            {(pairSearch || decisionFilter !== 'ALL' || outcomeFilter !== 'ALL' || vipFilter !== 'ALL') && (
+            {/* V4 Gate Filter — configurable V4 strategy gate */}
+            <div className="flex flex-col gap-1.5 px-2 py-1.5 rounded-lg border border-amber-500/20 bg-amber-500/5">
+              <div className="flex items-center gap-1.5">
+                <span className="text-amber-400 text-sm">🛡️</span>
+                <span className="text-[11px] font-semibold text-amber-300 mr-1">V4 Gate</span>
+                {['ALL', 'PASS', 'REJECT'].map(v => (
+                  <button
+                    key={v}
+                    onClick={() => setV4GateFilter(v)}
+                    className={cn(
+                      "px-2.5 py-1 rounded text-[11px] font-medium transition-colors border",
+                      v4GateFilter === v
+                        ? v === 'ALL' ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                          : v === 'PASS' ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                          : 'bg-red-500/20 border-red-500/40 text-red-300'
+                        : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                    )}
+                  >
+                    {v === 'ALL' ? 'Tous' : v === 'PASS' ? '✅ Pass' : '❌ Reject'}
+                  </button>
+                ))}
+              </div>
+              {v4GateFilter !== 'ALL' && (
+                <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                  {/* Min score */}
+                  <label className="flex items-center gap-1 text-gray-400">
+                    Score≥
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={v4MinScore}
+                      onChange={e => setV4MinScore(Math.max(1, Math.min(10, parseInt(e.target.value) || 0)))}
+                      className="w-12 px-1.5 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200 text-center"
+                    />
+                  </label>
+                  {/* VIP types */}
+                  <span className="text-gray-500">•</span>
+                  <span className="text-gray-400">VIP types:</span>
+                  {[
+                    { key: 'vip', label: '⭐ VIP', state: v4AllowVip, set: setV4AllowVip },
+                    { key: 'ht', label: '🏆 HT', state: v4AllowHt, set: setV4AllowHt },
+                    { key: 'novip', label: 'No VIP', state: v4AllowNoVip, set: setV4AllowNoVip },
+                  ].map(opt => (
+                    <button
+                      key={opt.key}
+                      onClick={() => opt.set(!opt.state)}
+                      className={cn(
+                        "px-2 py-0.5 rounded border",
+                        opt.state
+                          ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                          : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
+                      )}
+                    >
+                      {opt.state ? '✓ ' : ''}{opt.label}
+                    </button>
+                  ))}
+                  {/* 4H candle direction */}
+                  <span className="text-gray-500">•</span>
+                  <span className="text-gray-400">4H:</span>
+                  {([
+                    { key: 'green', label: '🟢 Green', color: 'emerald' },
+                    { key: 'red', label: '🔴 Red', color: 'red' },
+                    { key: 'any', label: 'Any', color: 'gray' },
+                  ] as const).map(opt => (
+                    <button
+                      key={opt.key}
+                      onClick={() => setV4CandleDir(opt.key)}
+                      className={cn(
+                        "px-2 py-0.5 rounded border",
+                        v4CandleDir === opt.key
+                          ? opt.color === 'emerald' ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                            : opt.color === 'red' ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                            : 'bg-gray-600/20 border-gray-500/40 text-gray-300'
+                          : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  {/* Reset to defaults */}
+                  <button
+                    onClick={() => {
+                      setV4MinScore(8); setV4AllowVip(true); setV4AllowHt(true);
+                      setV4AllowNoVip(false); setV4CandleDir('green')
+                    }}
+                    className="px-2 py-0.5 rounded border border-gray-700 bg-gray-800 text-gray-500 hover:text-gray-300"
+                    title="Reset aux valeurs V4 par défaut"
+                  >
+                    ↺ V4 défaut
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {(pairSearch || decisionFilter !== 'ALL' || outcomeFilter !== 'ALL' || vipFilter !== 'ALL' || v4GateFilter !== 'ALL') && (
               <button
-                onClick={() => { setPairSearch(''); setDecisionFilter('ALL'); setOutcomeFilter('ALL'); setVipFilter('ALL'); setGradeFilter([]); setDateFrom(''); setDateTo(''); setMinConf(''); setMaxConf(''); setMinPnl(''); setMaxPnl(''); setMinScore(''); setMinAccum(''); setMaxAccum(''); setMinDiPlus(''); setMaxDiPlus(''); setMinDiMinus(''); setMaxDiMinus(''); setMinAdx(''); setMaxAdx(''); setMinRsi(''); setMaxRsi(''); setPpFilter('ALL'); setEcFilter('ALL'); setTfFilter([]); setMinPuissance(''); setMinVolPct(''); setMaxVolPct(''); setCondFilters([]); setMinChange24h(''); setMaxChange24h(''); setMinBody4h(''); setMaxBody4h(''); setMinRange4h(''); setMaxRange4h(''); setDirFilter('ALL'); setFgFilter([]); setBtcTrendFilter('ALL'); setEthTrendFilter('ALL'); setAltSeasonFilter('ALL'); setMinVol1h(''); setMinVol4h(''); setMinVol24h(''); setMinVol48h(''); setMinDiSpread(''); setMaxDiSpread(''); setMaxStc15m(''); setMaxStc30m(''); setMaxStc1h(''); setMinTfBody(''); setV8v9AllMode(false) }}
+                onClick={() => { setPairSearch(''); setDecisionFilter('ALL'); setOutcomeFilter('ALL'); setVipFilter('ALL'); setV4GateFilter('ALL'); setGradeFilter([]); setDateFrom(''); setDateTo(''); setMinConf(''); setMaxConf(''); setMinPnl(''); setMaxPnl(''); setMinScore(''); setMinAccum(''); setMaxAccum(''); setMinDiPlus(''); setMaxDiPlus(''); setMinDiMinus(''); setMaxDiMinus(''); setMinAdx(''); setMaxAdx(''); setMinRsi(''); setMaxRsi(''); setPpFilter('ALL'); setEcFilter('ALL'); setTfFilter([]); setMinPuissance(''); setMinVolPct(''); setMaxVolPct(''); setCondFilters([]); setMinChange24h(''); setMaxChange24h(''); setMinBody4h(''); setMaxBody4h(''); setMinRange4h(''); setMaxRange4h(''); setDirFilter('ALL'); setFgFilter([]); setBtcTrendFilter('ALL'); setEthTrendFilter('ALL'); setAltSeasonFilter('ALL'); setMinVol1h(''); setMinVol4h(''); setMinVol24h(''); setMinVol48h(''); setMinDiSpread(''); setMaxDiSpread(''); setMaxStc15m(''); setMaxStc30m(''); setMaxStc1h(''); setMinTfBody(''); setV8v9AllMode(false);
+                  // Tier 1+2 reset
+                  setMinBody15m(''); setMaxBody15m(''); setMinBody30m(''); setMaxBody30m(''); setMinBody1h(''); setMaxBody1h('');
+                  setMinRange15m(''); setMaxRange15m(''); setMinRange30m(''); setMaxRange30m(''); setMinRange1h(''); setMaxRange1h('');
+                  setDir15m('ALL'); setDir30m('ALL'); setDir1h('ALL');
+                  setMinBtcDom(''); setMaxBtcDom(''); setMinEthDom(''); setMaxEthDom(''); setMinOthersD(''); setMaxOthersD('');
+                  setMinBtc24h(''); setMaxBtc24h(''); setMinEth24h(''); setMaxEth24h('');
+                  setMinVolUsdt(''); setMinAccumH(''); setMaxAccumH(''); setMinQualityAxes('');
+                  setBtcSeasonFilter('ALL'); setEthSeasonFilter('ALL');
+                  setLazy4hFilter([]); setDmiCross4hFilter('ALL'); setBougie4hFilter('ALL'); setEmotionFilter([]);
+                  setMinRsiMv15m(''); setMinRsiMv1h(''); setMinRsiMv4h('');
+                  setMinDiPMv15m(''); setMinDiPMv1h(''); setMinDiPMv4h('');
+                  setMinEcMv15m(''); setMinEcMv1h(''); setMinEcMv4h('');
+                  setMinMaxProfit(''); setMaxMaxProfit('');
+                  setLazy15mFilter([]); setLazy30mFilter([]); setLazy1hFilter([]);
+                  // Tier 3 reset
+                  setMinProgCount(''); setMinBonusCount(''); setFib4hF('ALL'); setFib1hF('ALL');
+                  setVpPos1h([]); setVpPos4h([]); setObPos1h([]); setObPos4h([]);
+                  setObStrength1h([]); setObStrength4h([]); setObMitig1h('ALL'); setObMitig4h('ALL');
+                  setFvgPos1h([]); setFvgPos4h([]);
+                  setMacd1hTrend([]); setMacd4hTrend([]); setMacd1hGrow('ALL'); setMacd4hGrow('ALL');
+                  setBb1hSqueeze('ALL'); setBb4hSqueeze('ALL');
+                  setStoch1hZone([]); setStoch4hZone([]);
+                  setMinEmaStack1h(''); setMinEmaStack4h('');
+                  setMinAdx1h(''); setMaxAdx1h(''); setMinRsiMtf(''); setMinMlScore('');
+                }}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-200 bg-gray-800 border border-gray-700 hover:bg-gray-700"
               >
                 <X className="w-3 h-3" /> Reset
@@ -815,22 +1367,22 @@ export default function OpenClawPageClient() {
             <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
               <div>
                 <label className="text-[10px] text-gray-500 uppercase">Body 4H min %</label>
-                <input type="number" placeholder="0" value={minBody4h} onChange={e => setMinBody4h(e.target.value)}
+                <input type="number" step="0.1" placeholder="0" value={minBody4h} onChange={e => setMinBody4h(e.target.value)}
                   className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
               </div>
               <div>
                 <label className="text-[10px] text-gray-500 uppercase">Body 4H max %</label>
-                <input type="number" placeholder="100" value={maxBody4h} onChange={e => setMaxBody4h(e.target.value)}
+                <input type="number" step="0.1" placeholder="100" value={maxBody4h} onChange={e => setMaxBody4h(e.target.value)}
                   className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
               </div>
               <div>
                 <label className="text-[10px] text-gray-500 uppercase">Range 4H min %</label>
-                <input type="number" placeholder="0" value={minRange4h} onChange={e => setMinRange4h(e.target.value)}
+                <input type="number" step="0.1" placeholder="0" value={minRange4h} onChange={e => setMinRange4h(e.target.value)}
                   className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
               </div>
               <div>
                 <label className="text-[10px] text-gray-500 uppercase">Range 4H max %</label>
-                <input type="number" placeholder="100" value={maxRange4h} onChange={e => setMaxRange4h(e.target.value)}
+                <input type="number" step="0.1" placeholder="100" value={maxRange4h} onChange={e => setMaxRange4h(e.target.value)}
                   className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
               </div>
               <div>
@@ -844,24 +1396,65 @@ export default function OpenClawPageClient() {
                   className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">Vol Spike 1H min %</label>
-                <input type="number" placeholder="-100" value={minVol1h} onChange={e => setMinVol1h(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                <label className="text-[10px] text-gray-500 uppercase">ADX − DI− min/max</label>
+                <div className="flex gap-1">
+                  <input type="number" placeholder="min" value={minAdxDim} onChange={e => setMinAdxDim(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                  <input type="number" placeholder="max" value={maxAdxDim} onChange={e => setMaxAdxDim(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                </div>
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">Vol Spike 4H min %</label>
-                <input type="number" placeholder="-100" value={minVol4h} onChange={e => setMinVol4h(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                <label className="text-[10px] text-gray-500 uppercase">Vol Spike 1H min/max %</label>
+                <div className="flex gap-1">
+                  <input type="number" placeholder="min" value={minVol1h} onChange={e => setMinVol1h(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                  <input type="number" placeholder="max" value={maxVol1h} onChange={e => setMaxVol1h(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                </div>
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">Vol Spike 24H min %</label>
-                <input type="number" placeholder="-100" value={minVol24h} onChange={e => setMinVol24h(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                <label className="text-[10px] text-gray-500 uppercase">Vol Spike 4H min/max %</label>
+                <div className="flex gap-1">
+                  <input type="number" placeholder="min" value={minVol4h} onChange={e => setMinVol4h(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                  <input type="number" placeholder="max" value={maxVol4h} onChange={e => setMaxVol4h(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                </div>
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">Vol Spike 48H min %</label>
-                <input type="number" placeholder="-100" value={minVol48h} onChange={e => setMinVol48h(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                <label className="text-[10px] text-gray-500 uppercase">Vol Spike 24H min/max %</label>
+                <div className="flex gap-1">
+                  <input type="number" placeholder="min" value={minVol24h} onChange={e => setMinVol24h(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                  <input type="number" placeholder="max" value={maxVol24h} onChange={e => setMaxVol24h(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Vol Spike 48H min/max %</label>
+                <div className="flex gap-1">
+                  <input type="number" placeholder="min" value={minVol48h} onChange={e => setMinVol48h(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                  <input type="number" placeholder="max" value={maxVol48h} onChange={e => setMaxVol48h(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Exclure vol tout rouge</label>
+                <label className="flex items-center gap-2 mt-1 cursor-pointer px-2 py-1.5 bg-gray-800 border border-gray-700 rounded hover:border-red-500/40">
+                  <input type="checkbox" checked={excludeAllRedVol} onChange={e => setExcludeAllRedVol(e.target.checked)}
+                    className="w-3.5 h-3.5 accent-red-500" />
+                  <span className="text-[10px] text-gray-300">V1h+V4h+V24h+V48h tous &lt; 0</span>
+                </label>
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase">Exclure si 4+ indices gris</label>
+                <label className="flex items-center gap-2 mt-1 cursor-pointer px-2 py-1.5 bg-gray-800 border border-gray-700 rounded hover:border-gray-400/40">
+                  <input type="checkbox" checked={excludeGrayIndicators} onChange={e => setExcludeGrayIndicators(e.target.checked)}
+                    className="w-3.5 h-3.5 accent-gray-400" />
+                  <span className="text-[10px] text-gray-300">DI+ / DI- / ADX / D± / RSI (4+ neutres)</span>
+                </label>
               </div>
               <div>
                 <label className="text-[10px] text-gray-500 uppercase">TF Body min %</label>
@@ -869,19 +1462,31 @@ export default function OpenClawPageClient() {
                   className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">STC 15m max</label>
-                <input type="number" step="0.1" placeholder="1" value={maxStc15m} onChange={e => setMaxStc15m(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                <label className="text-[10px] text-gray-500 uppercase">STC 15m min/max</label>
+                <div className="flex gap-1">
+                  <input type="number" step="0.1" placeholder="min" value={minStc15m} onChange={e => setMinStc15m(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                  <input type="number" step="0.1" placeholder="max" value={maxStc15m} onChange={e => setMaxStc15m(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                </div>
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">STC 30m max</label>
-                <input type="number" step="0.1" placeholder="1" value={maxStc30m} onChange={e => setMaxStc30m(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                <label className="text-[10px] text-gray-500 uppercase">STC 30m min/max</label>
+                <div className="flex gap-1">
+                  <input type="number" step="0.1" placeholder="min" value={minStc30m} onChange={e => setMinStc30m(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                  <input type="number" step="0.1" placeholder="max" value={maxStc30m} onChange={e => setMaxStc30m(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                </div>
               </div>
               <div>
-                <label className="text-[10px] text-gray-500 uppercase">STC 1h max</label>
-                <input type="number" step="0.1" placeholder="1" value={maxStc1h} onChange={e => setMaxStc1h(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                <label className="text-[10px] text-gray-500 uppercase">STC 1h min/max</label>
+                <div className="flex gap-1">
+                  <input type="number" step="0.1" placeholder="min" value={minStc1h} onChange={e => setMinStc1h(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                  <input type="number" step="0.1" placeholder="max" value={maxStc1h} onChange={e => setMaxStc1h(e.target.value)}
+                    className="w-1/2 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500" />
+                </div>
               </div>
               <div>
                 <label className="text-[10px] text-gray-500 uppercase">Direction 4H</label>
@@ -1039,6 +1644,7 @@ export default function OpenClawPageClient() {
               const wins = res.filter(d => d.outcome === 'WIN').length
               const losses = res.length - wins
               const wr = res.length > 0 ? (wins / res.length * 100) : 0
+              const pending = filtered.filter(d => d.outcome === 'PENDING' || d.outcome == null).length
               const pnls = res.filter(d => d.pnl_pct != null).map(d => d.pnl_pct!)
               const avgPnl = pnls.length > 0 ? pnls.reduce((a, b) => a + b, 0) / pnls.length : 0
               const totalPnl = pnls.reduce((a, b) => a + b, 0)
@@ -1055,7 +1661,7 @@ export default function OpenClawPageClient() {
                   <div className="bg-gray-800/50 rounded-lg p-2.5 text-center">
                     <div className="text-[10px] text-gray-500">WR Resolu</div>
                     <div className={cn("text-sm font-bold", wr >= 50 ? "text-green-400" : wr >= 35 ? "text-yellow-400" : "text-red-400")}>{wr.toFixed(1)}%</div>
-                    <div className="text-[10px] text-gray-600">{wins}W/{losses}L</div>
+                    <div className="text-[10px] text-gray-600">{wins}W/{losses}L<span className="text-gray-500"> · {pending}P</span></div>
                   </div>
                   <div className="bg-gray-800/50 rounded-lg p-2.5 text-center">
                     <div className="text-[10px] text-gray-500">PnL Total</div>
@@ -1084,6 +1690,325 @@ export default function OpenClawPageClient() {
                 </div>
               )
             })()}
+          {/* ════ NEW: Tier 1+2 indicator filters ════ */}
+          <div className="bg-gray-900/30 border border-gray-800 rounded-xl p-3 space-y-3">
+            <div className="text-[11px] font-semibold text-cyan-300">📊 Indicateurs supplémentaires</div>
+
+            {/* Body/Range/Direction per TF */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-gray-400 mr-1">🕯 Body% :</span>
+              {[['15m', minBody15m, setMinBody15m, maxBody15m, setMaxBody15m],
+                ['30m', minBody30m, setMinBody30m, maxBody30m, setMaxBody30m],
+                ['1h',  minBody1h,  setMinBody1h,  maxBody1h,  setMaxBody1h]].map(([tf, mn, smn, mx, smx]: any) => (
+                <span key={tf} className="flex items-center gap-0.5">
+                  <span className="text-gray-500">{tf}</span>
+                  <input type="number" step="0.1" placeholder="min" value={mn} onChange={e => smn(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+                  <input type="number" step="0.1" placeholder="max" value={mx} onChange={e => smx(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+                </span>
+              ))}
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400 mr-1">📏 Range% :</span>
+              {[['15m', minRange15m, setMinRange15m, maxRange15m, setMaxRange15m],
+                ['30m', minRange30m, setMinRange30m, maxRange30m, setMaxRange30m],
+                ['1h',  minRange1h,  setMinRange1h,  maxRange1h,  setMaxRange1h]].map(([tf, mn, smn, mx, smx]: any) => (
+                <span key={tf} className="flex items-center gap-0.5">
+                  <span className="text-gray-500">{tf}</span>
+                  <input type="number" step="0.1" placeholder="min" value={mn} onChange={e => smn(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+                  <input type="number" step="0.1" placeholder="max" value={mx} onChange={e => smx(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+                </span>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-gray-400">🎨 Direction :</span>
+              {[['15m', dir15m, setDir15m], ['30m', dir30m, setDir30m], ['1h', dir1h, setDir1h]].map(([tf, val, setter]: any) => (
+                <span key={tf} className="flex items-center gap-0.5">
+                  <span className="text-gray-500">{tf}</span>
+                  {(['ALL', 'green', 'red'] as const).map(opt => (
+                    <button key={opt} onClick={() => setter(opt)} className={cn("px-1.5 py-0.5 rounded border", val === opt
+                      ? opt === 'green' ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                        : opt === 'red' ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                        : 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                      : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300')}>
+                      {opt === 'ALL' ? 'all' : opt === 'green' ? '🟢' : '🔴'}
+                    </button>
+                  ))}
+                </span>
+              ))}
+            </div>
+
+            {/* Market dominance + 24h changes */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-gray-400 mr-1">🌍 Dom% :</span>
+              {[['BTC', minBtcDom, setMinBtcDom, maxBtcDom, setMaxBtcDom],
+                ['ETH', minEthDom, setMinEthDom, maxEthDom, setMaxEthDom],
+                ['Oth', minOthersD, setMinOthersD, maxOthersD, setMaxOthersD]].map(([lbl, mn, smn, mx, smx]: any) => (
+                <span key={lbl} className="flex items-center gap-0.5">
+                  <span className="text-gray-500">{lbl}</span>
+                  <input type="number" step="0.1" placeholder="min" value={mn} onChange={e => smn(e.target.value)} className="w-14 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+                  <input type="number" step="0.1" placeholder="max" value={mx} onChange={e => smx(e.target.value)} className="w-14 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+                </span>
+              ))}
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400 mr-1">24h Δ :</span>
+              {[['BTC', minBtc24h, setMinBtc24h, maxBtc24h, setMaxBtc24h],
+                ['ETH', minEth24h, setMinEth24h, maxEth24h, setMaxEth24h]].map(([lbl, mn, smn, mx, smx]: any) => (
+                <span key={lbl} className="flex items-center gap-0.5">
+                  <span className="text-gray-500">{lbl}</span>
+                  <input type="number" step="0.1" placeholder="min" value={mn} onChange={e => smn(e.target.value)} className="w-14 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+                  <input type="number" step="0.1" placeholder="max" value={mx} onChange={e => smx(e.target.value)} className="w-14 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+                </span>
+              ))}
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400">Vol $≥</span>
+              <input type="number" step="1000" placeholder="min" value={minVolUsdt} onChange={e => setMinVolUsdt(e.target.value)} className="w-20 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+            </div>
+
+            {/* Accumulation hours + Quality axes + season toggles */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-gray-400">⏱ Accum heures :</span>
+              <input type="number" placeholder="min" value={minAccumH} onChange={e => setMinAccumH(e.target.value)} className="w-14 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+              <input type="number" placeholder="max" value={maxAccumH} onChange={e => setMaxAccumH(e.target.value)} className="w-14 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400">📐 Quality axes ≥</span>
+              <input type="number" min="0" max="5" placeholder="0-5" value={minQualityAxes} onChange={e => setMinQualityAxes(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200 text-center" />
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400">BTC season :</span>
+              {(['ALL', 'YES', 'NO'] as const).map(o => (
+                <button key={o} onClick={() => setBtcSeasonFilter(o)} className={cn("px-1.5 py-0.5 rounded border", btcSeasonFilter === o ? 'bg-orange-500/20 border-orange-500/40 text-orange-300' : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300')}>{o.toLowerCase()}</button>
+              ))}
+              <span className="text-gray-400">ETH bull :</span>
+              {(['ALL', 'YES', 'NO'] as const).map(o => (
+                <button key={o} onClick={() => setEthSeasonFilter(o)} className={cn("px-1.5 py-0.5 rounded border", ethSeasonFilter === o ? 'bg-blue-500/20 border-blue-500/40 text-blue-300' : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300')}>{o.toLowerCase()}</button>
+              ))}
+            </div>
+
+            {/* Tracker fields: emotion, dmi cross 4h, bougie 4h, max profit */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-gray-400">🎯 Emotion :</span>
+              {['STRONG', 'NEUTRAL', 'WEAK'].map(e => (
+                <button key={e} onClick={() => setEmotionFilter(emotionFilter.includes(e) ? emotionFilter.filter(x => x !== e) : [...emotionFilter, e])} className={cn("px-1.5 py-0.5 rounded border", emotionFilter.includes(e) ? 'bg-pink-500/20 border-pink-500/40 text-pink-300' : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300')}>{e.toLowerCase()}</button>
+              ))}
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400">⚔️ DMI cross 4H :</span>
+              {(['ALL', 'YES', 'NO'] as const).map(o => (
+                <button key={o} onClick={() => setDmiCross4hFilter(o)} className={cn("px-1.5 py-0.5 rounded border", dmiCross4hFilter === o ? 'bg-red-500/20 border-red-500/40 text-red-300' : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300')}>{o.toLowerCase()}</button>
+              ))}
+              <span className="text-gray-400">🟢 Bougie 4H :</span>
+              {(['ALL', 'YES', 'NO'] as const).map(o => (
+                <button key={o} onClick={() => setBougie4hFilter(o)} className={cn("px-1.5 py-0.5 rounded border", bougie4hFilter === o ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300' : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300')}>{o.toLowerCase()}</button>
+              ))}
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400">📈 Max profit% :</span>
+              <input type="number" step="0.5" placeholder="min" value={minMaxProfit} onChange={e => setMinMaxProfit(e.target.value)} className="w-14 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+              <input type="number" step="0.5" placeholder="max" value={maxMaxProfit} onChange={e => setMaxMaxProfit(e.target.value)} className="w-14 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+            </div>
+
+            {/* LazyBar colors per TF */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-gray-400 mr-1">⚡ LazyBar :</span>
+              {[['4H', lazy4hFilter, setLazy4hFilter],
+                ['1h', lazy1hFilter, setLazy1hFilter],
+                ['30m', lazy30mFilter, setLazy30mFilter],
+                ['15m', lazy15mFilter, setLazy15mFilter]].map(([tf, val, setter]: any) => (
+                <span key={tf} className="flex items-center gap-0.5">
+                  <span className="text-gray-500">{tf}</span>
+                  {[['Red', 'red'], ['Yellow', 'yellow'], ['Green', 'green'], ['Navy', 'navy']].map(([lbl, color]) => {
+                    const active = val.includes(lbl)
+                    const colorCls = color === 'red' ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                      : color === 'yellow' ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-300'
+                      : color === 'green' ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                      : 'bg-blue-500/20 border-blue-500/40 text-blue-300'
+                    return (
+                      <button key={lbl} onClick={() => setter(active ? val.filter((x: string) => x !== lbl) : [...val, lbl])}
+                        className={cn("px-1 py-0.5 rounded border", active ? colorCls : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300')}>
+                        {lbl[0]}
+                      </button>
+                    )
+                  })}
+                </span>
+              ))}
+            </div>
+
+            {/* Moves per TF: RSI, DI+, EC */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-gray-400 mr-1">📊 Moves min :</span>
+              {[['RSI', minRsiMv15m, setMinRsiMv15m, minRsiMv1h, setMinRsiMv1h, minRsiMv4h, setMinRsiMv4h],
+                ['DI+', minDiPMv15m, setMinDiPMv15m, minDiPMv1h, setMinDiPMv1h, minDiPMv4h, setMinDiPMv4h],
+                ['EC',  minEcMv15m, setMinEcMv15m, minEcMv1h, setMinEcMv1h, minEcMv4h, setMinEcMv4h]].map(([lbl, v15, s15, v1h, s1h, v4h, s4h]: any) => (
+                <span key={lbl} className="flex items-center gap-0.5">
+                  <span className="text-gray-500">{lbl}:</span>
+                  <input type="number" step="1" placeholder="15m" value={v15} onChange={e => s15(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+                  <input type="number" step="1" placeholder="1h"  value={v1h} onChange={e => s1h(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+                  <input type="number" step="1" placeholder="4h"  value={v4h} onChange={e => s4h(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* ════ Tier 3 — analyze_alert structured features ════ */}
+          <div className="bg-gray-900/30 border border-fuchsia-900/40 rounded-xl p-3 space-y-3">
+            <div className="text-[11px] font-semibold text-fuchsia-300">🔬 Indicateurs analyse OpenClaw <span className="text-gray-500 font-normal">(disponibles à partir de 26/04 — alertes plus anciennes : champs vides)</span></div>
+
+            {/* Progressive conditions + bonus count + ADX 1H + RSI MTF + ML */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-gray-400">⚙️ Prog cond ≥</span>
+              <input type="number" min="0" max="5" placeholder="0-5" value={minProgCount} onChange={e => setMinProgCount(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200 text-center" />
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400">🎁 Bonus ≥</span>
+              <input type="number" min="0" max="23" placeholder="0-23" value={minBonusCount} onChange={e => setMinBonusCount(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200 text-center" />
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400">ADX 1H</span>
+              <input type="number" placeholder="min" value={minAdx1h} onChange={e => setMinAdx1h(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+              <input type="number" placeholder="max" value={maxAdx1h} onChange={e => setMaxAdx1h(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400">RSI MTF aligned ≥</span>
+              <input type="number" min="0" max="3" placeholder="0-3" value={minRsiMtf} onChange={e => setMinRsiMtf(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200 text-center" />
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400">🤖 ML p_success ≥</span>
+              <input type="number" step="0.05" min="0" max="1" placeholder="0-1" value={minMlScore} onChange={e => setMinMlScore(e.target.value)} className="w-14 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200" />
+            </div>
+
+            {/* Fibonacci + BB squeeze + MACD growing */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-gray-400">🔢 Fib :</span>
+              {(['ALL','YES','NO'] as const).map(o => (
+                <button key={'f4-'+o} onClick={() => setFib4hF(o)} className={cn("px-1.5 py-0.5 rounded border", fib4hF === o ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-300' : 'bg-gray-800 border-gray-700 text-gray-500')}>4H:{o.toLowerCase()}</button>
+              ))}
+              {(['ALL','YES','NO'] as const).map(o => (
+                <button key={'f1-'+o} onClick={() => setFib1hF(o)} className={cn("px-1.5 py-0.5 rounded border", fib1hF === o ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-300' : 'bg-gray-800 border-gray-700 text-gray-500')}>1H:{o.toLowerCase()}</button>
+              ))}
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400">📊 BB squeeze :</span>
+              {(['ALL','YES','NO'] as const).map(o => (
+                <button key={'bb1-'+o} onClick={() => setBb1hSqueeze(o)} className={cn("px-1.5 py-0.5 rounded border", bb1hSqueeze === o ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300' : 'bg-gray-800 border-gray-700 text-gray-500')}>1H:{o.toLowerCase()}</button>
+              ))}
+              {(['ALL','YES','NO'] as const).map(o => (
+                <button key={'bb4-'+o} onClick={() => setBb4hSqueeze(o)} className={cn("px-1.5 py-0.5 rounded border", bb4hSqueeze === o ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300' : 'bg-gray-800 border-gray-700 text-gray-500')}>4H:{o.toLowerCase()}</button>
+              ))}
+            </div>
+
+            {/* MACD trend + StochRSI zone */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-gray-400">📈 MACD trend :</span>
+              {(['1h', '4h'] as const).map(tf => {
+                const val = tf === '1h' ? macd1hTrend : macd4hTrend
+                const setter = tf === '1h' ? setMacd1hTrend : setMacd4hTrend
+                return ['BULLISH','BEARISH'].map(t => {
+                  const active = val.includes(t)
+                  return (
+                    <button key={`m-${tf}-${t}`} onClick={() => setter(active ? val.filter(x => x !== t) : [...val, t])}
+                      className={cn("px-1.5 py-0.5 rounded border", active ? (t === 'BULLISH' ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300' : 'bg-red-500/20 border-red-500/40 text-red-300') : 'bg-gray-800 border-gray-700 text-gray-500')}>
+                      {tf}:{t === 'BULLISH' ? '🟢' : '🔴'}
+                    </button>
+                  )
+                })
+              })}
+              <span className="text-gray-400">grow:</span>
+              {(['ALL','YES','NO'] as const).map(o => (
+                <button key={'mg1-'+o} onClick={() => setMacd1hGrow(o)} className={cn("px-1.5 py-0.5 rounded border", macd1hGrow === o ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300' : 'bg-gray-800 border-gray-700 text-gray-500')}>1H:{o.toLowerCase()}</button>
+              ))}
+              {(['ALL','YES','NO'] as const).map(o => (
+                <button key={'mg4-'+o} onClick={() => setMacd4hGrow(o)} className={cn("px-1.5 py-0.5 rounded border", macd4hGrow === o ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300' : 'bg-gray-800 border-gray-700 text-gray-500')}>4H:{o.toLowerCase()}</button>
+              ))}
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400">🌊 StochRSI :</span>
+              {(['1h', '4h'] as const).map(tf => {
+                const val = tf === '1h' ? stoch1hZone : stoch4hZone
+                const setter = tf === '1h' ? setStoch1hZone : setStoch4hZone
+                return ['OVERSOLD','NEUTRAL','OVERBOUGHT'].map(z => {
+                  const active = val.includes(z)
+                  return (
+                    <button key={`s-${tf}-${z}`} onClick={() => setter(active ? val.filter(x => x !== z) : [...val, z])}
+                      className={cn("px-1.5 py-0.5 rounded border", active ? (z === 'OVERSOLD' ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300' : z === 'OVERBOUGHT' ? 'bg-red-500/20 border-red-500/40 text-red-300' : 'bg-gray-700/50 border-gray-600 text-gray-300') : 'bg-gray-800 border-gray-700 text-gray-500')}>
+                      {tf}:{z === 'OVERSOLD' ? '⬇' : z === 'OVERBOUGHT' ? '⬆' : '➖'}
+                    </button>
+                  )
+                })
+              })}
+            </div>
+
+            {/* EMA Stack count + Volume Profile position */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-gray-400">🪜 EMA Stack ≥ :</span>
+              <span className="text-gray-500">1H</span>
+              <input type="number" min="0" max="4" placeholder="0-4" value={minEmaStack1h} onChange={e => setMinEmaStack1h(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200 text-center" />
+              <span className="text-gray-500">4H</span>
+              <input type="number" min="0" max="4" placeholder="0-4" value={minEmaStack4h} onChange={e => setMinEmaStack4h(e.target.value)} className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200 text-center" />
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-400">🏦 VP pos :</span>
+              {(['1h', '4h'] as const).map(tf => {
+                const val = tf === '1h' ? vpPos1h : vpPos4h
+                const setter = tf === '1h' ? setVpPos1h : setVpPos4h
+                return ['IN_VA','ABOVE_VAH','BELOW_VAL'].map(p => {
+                  const active = val.includes(p)
+                  return (
+                    <button key={`vp-${tf}-${p}`} onClick={() => setter(active ? val.filter(x => x !== p) : [...val, p])}
+                      className={cn("px-1.5 py-0.5 rounded border", active ? 'bg-purple-500/20 border-purple-500/40 text-purple-300' : 'bg-gray-800 border-gray-700 text-gray-500')}>
+                      {tf}:{p === 'IN_VA' ? 'IN' : p === 'ABOVE_VAH' ? '↑' : '↓'}
+                    </button>
+                  )
+                })
+              })}
+            </div>
+
+            {/* Order Blocks — position + strength + mitigated */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-gray-400">🧱 OB pos :</span>
+              {(['1h', '4h'] as const).map(tf => {
+                const val = tf === '1h' ? obPos1h : obPos4h
+                const setter = tf === '1h' ? setObPos1h : setObPos4h
+                return ['ABOVE','INSIDE','BELOW'].map(p => {
+                  const active = val.includes(p)
+                  return (
+                    <button key={`ob-${tf}-${p}`} onClick={() => setter(active ? val.filter(x => x !== p) : [...val, p])}
+                      className={cn("px-1.5 py-0.5 rounded border", active ? 'bg-orange-500/20 border-orange-500/40 text-orange-300' : 'bg-gray-800 border-gray-700 text-gray-500')}>
+                      {tf}:{p === 'ABOVE' ? '↑' : p === 'INSIDE' ? '○' : '↓'}
+                    </button>
+                  )
+                })
+              })}
+              <span className="text-gray-400">str :</span>
+              {(['1h', '4h'] as const).map(tf => {
+                const val = tf === '1h' ? obStrength1h : obStrength4h
+                const setter = tf === '1h' ? setObStrength1h : setObStrength4h
+                return ['STRONG','MEDIUM','WEAK'].map(s => {
+                  const active = val.includes(s)
+                  return (
+                    <button key={`obs-${tf}-${s}`} onClick={() => setter(active ? val.filter(x => x !== s) : [...val, s])}
+                      className={cn("px-1.5 py-0.5 rounded border", active ? 'bg-orange-500/20 border-orange-500/40 text-orange-300' : 'bg-gray-800 border-gray-700 text-gray-500')}>
+                      {tf}:{s[0]}
+                    </button>
+                  )
+                })
+              })}
+              <span className="text-gray-400">mit :</span>
+              {(['ALL','YES','NO'] as const).map(o => (
+                <button key={'obm1-'+o} onClick={() => setObMitig1h(o)} className={cn("px-1.5 py-0.5 rounded border", obMitig1h === o ? 'bg-orange-500/20 border-orange-500/40 text-orange-300' : 'bg-gray-800 border-gray-700 text-gray-500')}>1H:{o.toLowerCase()}</button>
+              ))}
+              {(['ALL','YES','NO'] as const).map(o => (
+                <button key={'obm4-'+o} onClick={() => setObMitig4h(o)} className={cn("px-1.5 py-0.5 rounded border", obMitig4h === o ? 'bg-orange-500/20 border-orange-500/40 text-orange-300' : 'bg-gray-800 border-gray-700 text-gray-500')}>4H:{o.toLowerCase()}</button>
+              ))}
+            </div>
+
+            {/* FVG position */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-gray-400">🌫 FVG pos :</span>
+              {(['1h', '4h'] as const).map(tf => {
+                const val = tf === '1h' ? fvgPos1h : fvgPos4h
+                const setter = tf === '1h' ? setFvgPos1h : setFvgPos4h
+                return ['ABOVE','INSIDE','BELOW'].map(p => {
+                  const active = val.includes(p)
+                  return (
+                    <button key={`fvg-${tf}-${p}`} onClick={() => setter(active ? val.filter(x => x !== p) : [...val, p])}
+                      className={cn("px-1.5 py-0.5 rounded border", active ? 'bg-pink-500/20 border-pink-500/40 text-pink-300' : 'bg-gray-800 border-gray-700 text-gray-500')}>
+                      {tf}:{p === 'ABOVE' ? '↑' : p === 'INSIDE' ? '○' : '↓'}
+                    </button>
+                  )
+                })
+              })}
+            </div>
+          </div>
+
           </>)}
 
           {/* Quick Filters Bar — Date, Conf, PnL, Score, Accum, Grade */}
@@ -1253,9 +2178,107 @@ export default function OpenClawPageClient() {
                 setMinChange24h(''); setMaxChange24h(''); setMinRange4h(''); setV8v9AllMode(false); setShowAdvanced(true);
               }} className="px-2 py-1 rounded text-[10px] font-medium border transition-colors bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
               >Body+Vol</button>
+              <button onClick={() => {
+                setDecisionFilter('ALL'); setOutcomeFilter('ALL'); setVipFilter('ALL');
+                setMinDiPlus('37'); setMaxDiPlus('50');
+                setMinDiMinus('0'); setMaxDiMinus('14');
+                setMinAdx('15'); setMaxAdx('100');
+                setMinRsi('0'); setMaxRsi('79');
+                setMinPuissance('0'); setMinVolPct('0');
+                setMinChange24h(''); setMaxChange24h('36');
+                setMinBody4h('2.7'); setMaxBody4h('100');
+                setMinRange4h('0'); setMaxRange4h('34');
+                setMinDiSpread('0'); setMaxDiSpread('45');
+                setMinAdxDim('3'); setMaxAdxDim('');
+                setMinVol1h('-100'); setMinVol4h('-100'); setMinVol24h('-100'); setMinVol48h('-100');
+                setMaxVol1h(''); setMaxVol4h(''); setMaxVol24h(''); setMaxVol48h('');
+                setMinTfBody('0');
+                setMinStc15m('0.1'); setMaxStc15m('');
+                setMinStc30m('0.2'); setMaxStc30m('');
+                setMinStc1h('0.1'); setMaxStc1h('');
+                setDirFilter('green');
+                setFgFilter([]); setBtcTrendFilter('ALL'); setEthTrendFilter('ALL'); setAltSeasonFilter('ALL');
+                setPpFilter('YES'); setEcFilter('YES');
+                setTfFilter(['15m']);
+                setCondFilters([]);
+                setExcludeAllRedVol(true);
+                setV8v9AllMode(false); setShowAdvanced(true);
+              }} className="px-2 py-1 rounded text-[10px] font-medium border transition-colors bg-pink-500/10 border-pink-500/30 text-pink-400 hover:bg-pink-500/20"
+              title="Custom: Range≤34, DI-≤14, RSI≤79, STC mins, green 15m, PP+EC, vol tout rouge exclu"
+              >Custom</button>
+              <button onClick={() => {
+                setDecisionFilter('ALL'); setOutcomeFilter('ALL'); setVipFilter('ALL');
+                setMinScore('8');
+                setMinDiPlus('0'); setMaxDiPlus('100');
+                setMinDiMinus('0'); setMaxDiMinus('25');
+                setMinAdx('0'); setMaxAdx('100');
+                setMinRsi('0'); setMaxRsi('80');
+                setMinPuissance('0'); setMinVolPct('0');
+                setMinChange24h(''); setMaxChange24h('100');
+                setMinBody4h('2'); setMaxBody4h('100');
+                setMinRange4h('0'); setMaxRange4h('34');
+                setMinDiSpread('0'); setMaxDiSpread('80');
+                setMinVol1h(''); setMinVol4h(''); setMinVol24h('100'); setMinVol48h('');
+                setMaxVol1h(''); setMaxVol4h(''); setMaxVol24h('2000'); setMaxVol48h('');
+                setMinTfBody('0');
+                setMinStc15m('0.1'); setMaxStc15m('');
+                setMinStc30m('0.2'); setMaxStc30m('');
+                setMinStc1h('0.1'); setMaxStc1h('');
+                setDirFilter('green');
+                setFgFilter([]); setBtcTrendFilter('ALL'); setEthTrendFilter('ALL'); setAltSeasonFilter('ALL');
+                setPpFilter('YES'); setEcFilter('YES');
+                setTfFilter(['15m']);
+                setCondFilters([]);
+                setV8v9AllMode(false); setShowAdvanced(true);
+              }} className="px-2 py-1 rounded text-[10px] font-medium border transition-colors bg-fuchsia-500/10 border-fuchsia-500/30 text-fuchsia-400 hover:bg-fuchsia-500/20"
+              title="Custom Pro: Score≥8, RSI≤80, V24h 100-2000%, Range≤34, Body≥2, DI-≤25, green 15m, PP+EC"
+              >Custom Pro</button>
+              <button onClick={() => {
+                setDecisionFilter('ALL'); setOutcomeFilter('ALL'); setVipFilter('ALL');
+                setDirFilter('ALL'); setPpFilter('ALL'); setEcFilter('ALL');
+                setBtcTrendFilter('ALL'); setEthTrendFilter('ALL');
+                setMinBody4h(''); setMaxBody4h(''); setMinRange4h(''); setMaxRange4h('');
+                setMinAdx(''); setMaxAdx(''); setMinDiSpread(''); setMaxDiSpread('');
+                setMinDiPlus(''); setMaxDiPlus(''); setMinDiMinus(''); setMaxDiMinus('');
+                setMinRsi(''); setMaxRsi(''); setMinChange24h(''); setMaxChange24h('');
+                setMinVol1h(''); setMinVol4h(''); setMinVol24h(''); setMinVol48h('');
+                setMaxVol1h(''); setMaxVol4h(''); setMaxVol24h(''); setMaxVol48h('');
+                setExcludeAllRedVol(false); setExcludeGrayIndicators(false);
+                setMinAdxDim(''); setMaxAdxDim('');
+                setMaxStc15m(''); setMaxStc30m(''); setMaxStc1h(''); setMinTfBody('');
+                setMinStc15m(''); setMinStc30m(''); setMinStc1h('');
+                setV8v9AllMode(false);
+              }} className="px-2 py-1 rounded text-[10px] font-medium border transition-colors bg-gray-700/40 border-gray-600 text-gray-300 hover:bg-gray-600/60"
+              title="Réinitialiser tous les filtres (garde recherche pair + dates)"
+              >↺ Reset</button>
             </div>
           </div>
 
+          {/* View presets + Column Picker */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] text-gray-500 uppercase">Vue :</span>
+            <button onClick={() => setVisibleCols(new Set(VIEW_CLASSIC))}
+              className={cn("px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                setsEqual(visibleCols, VIEW_CLASSIC)
+                  ? "bg-blue-500/20 border-blue-500/40 text-blue-300"
+                  : "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700")}>
+              📋 Classique
+            </button>
+            <button onClick={() => setVisibleCols(new Set(VIEW_OPENCLAW))}
+              className={cn("px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                setsEqual(visibleCols, VIEW_OPENCLAW)
+                  ? "bg-fuchsia-500/20 border-fuchsia-500/40 text-fuchsia-300"
+                  : "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700")}>
+              🔬 Analyse OpenClaw
+            </button>
+            <button onClick={() => setVisibleCols(new Set(ALL_COLUMNS.map(c => c.key)))}
+              className={cn("px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                visibleCols.size === ALL_COLUMNS.length
+                  ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-300"
+                  : "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700")}>
+              🌐 Tout
+            </button>
+            <span className="text-gray-600">|</span>
           {/* Column Picker */}
           <div className="relative inline-block">
             <button onClick={() => setShowColPicker(!showColPicker)}
@@ -1284,6 +2307,7 @@ export default function OpenClawPageClient() {
               </div>
             )}
           </div>
+          </div>
 
           {/* Table */}
           <div className="bg-gray-900/50 rounded-xl border border-gray-800 overflow-hidden">
@@ -1300,6 +2324,7 @@ export default function OpenClawPageClient() {
                     {col('di_minus') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('di_minus')}>DI-{sortIcon('di_minus')}</th>}
                     {col('adx') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('adx')}>ADX{sortIcon('adx')}</th>}
                     {col('di_spread') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('di_spread')}>D±{sortIcon('di_spread')}</th>}
+                    {col('adx_minus_dim') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('adx_minus_dim')} title="ADX - DI-">A−D−{sortIcon('adx_minus_dim')}</th>}
                     {col('rsi') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('rsi')}>RSI{sortIcon('rsi')}</th>}
                     {col('change24h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('change24h')}>24h%{sortIcon('change24h')}</th>}
                     {col('body4h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" onClick={() => toggleSort('body4h')}>Body{sortIcon('body4h')}</th>}
@@ -1325,6 +2350,25 @@ export default function OpenClawPageClient() {
                     {col('pnl') && <th className="px-1 py-2 text-right cursor-pointer hover:text-gray-200 text-[10px]" onClick={() => toggleSort('pnl')}>PnL{sortIcon('pnl')}</th>}
                     {col('pnl_max') && <th className="px-1 py-2 text-right cursor-pointer hover:text-gray-200 text-[10px]" onClick={() => toggleSort('pnl_max')}>Max{sortIcon('pnl_max')}</th>}
                     {col('tv') && <th className="px-1 py-2 text-center text-[10px]">TV</th>}
+                    {col('prog') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="Conditions progressives effectives (avec tolérance -2%) /5" onClick={() => toggleSort('prog')}>Prog{sortIcon('prog')}</th>}
+                    {col('bonus_n') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="Bonus filters validés /23" onClick={() => toggleSort('bonus_n')}>Bonus{sortIcon('bonus_n')}</th>}
+                    {col('fib4h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="Fibonacci 4H bonus" onClick={() => toggleSort('fib4h')}>Fib4{sortIcon('fib4h')}</th>}
+                    {col('fib1h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="Fibonacci 1H bonus" onClick={() => toggleSort('fib1h')}>Fib1{sortIcon('fib1h')}</th>}
+                    {col('vp4h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="Volume Profile 4H position" onClick={() => toggleSort('vp4h')}>VP4{sortIcon('vp4h')}</th>}
+                    {col('vp1h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="Volume Profile 1H position" onClick={() => toggleSort('vp1h')}>VP1{sortIcon('vp1h')}</th>}
+                    {col('ob4h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="Order Block 4H position+strength" onClick={() => toggleSort('ob4h')}>OB4{sortIcon('ob4h')}</th>}
+                    {col('ob1h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="Order Block 1H position+strength" onClick={() => toggleSort('ob1h')}>OB1{sortIcon('ob1h')}</th>}
+                    {col('macd4h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="MACD 4H trend" onClick={() => toggleSort('macd4h')}>MACD4{sortIcon('macd4h')}</th>}
+                    {col('macd1h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="MACD 1H trend" onClick={() => toggleSort('macd1h')}>MACD1{sortIcon('macd1h')}</th>}
+                    {col('stoch4h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="StochRSI 4H zone" onClick={() => toggleSort('stoch4h')}>Sto4{sortIcon('stoch4h')}</th>}
+                    {col('stoch1h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="StochRSI 1H zone" onClick={() => toggleSort('stoch1h')}>Sto1{sortIcon('stoch1h')}</th>}
+                    {col('ema_st4h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="EMA Stack 4H count /4" onClick={() => toggleSort('ema_st4h')}>EMS4{sortIcon('ema_st4h')}</th>}
+                    {col('ema_st1h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="EMA Stack 1H count /4" onClick={() => toggleSort('ema_st1h')}>EMS1{sortIcon('ema_st1h')}</th>}
+                    {col('bb4h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="Bollinger Squeeze 4H" onClick={() => toggleSort('bb4h')}>BB4{sortIcon('bb4h')}</th>}
+                    {col('fvg4h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="Fair Value Gap 4H position" onClick={() => toggleSort('fvg4h')}>FVG4{sortIcon('fvg4h')}</th>}
+                    {col('adx1h') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="ADX 1H" onClick={() => toggleSort('adx1h')}>ADX1{sortIcon('adx1h')}</th>}
+                    {col('rsi_mtf') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="RSI MTF aligned count /3" onClick={() => toggleSort('rsi_mtf')}>RsiMtf{sortIcon('rsi_mtf')}</th>}
+                    {col('ml') && <th className="px-1 py-2 text-center text-[10px] cursor-pointer hover:text-gray-200" title="ML p_success" onClick={() => toggleSort('ml')}>ML{sortIcon('ml')}</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -1369,6 +2413,7 @@ export default function OpenClawPageClient() {
                             {col('di_minus') && <td className="px-1 py-1 text-center">{diMinus ? <span className={cn("text-[10px] font-mono", diMinus <= 15 ? 'text-green-400' : diMinus >= 25 ? 'text-red-400' : 'text-gray-400')}>{diMinus.toFixed(0)}</span> : dash}</td>}
                             {col('adx') && <td className="px-1 py-1 text-center">{adx ? <span className={cn("text-[10px] font-mono", adx >= 40 ? 'text-green-400' : adx >= 25 ? 'text-yellow-400' : 'text-gray-400')}>{adx.toFixed(0)}</span> : dash}</td>}
                             {col('di_spread') && <td className="px-1 py-1 text-center">{diPlus != null && diMinus != null ? (() => { const sp = diPlus - diMinus; const c2 = sp >= 40 ? 'text-red-400 font-bold' : sp >= 5 && sp <= 15 ? 'text-green-400' : sp < 0 ? 'text-red-400' : 'text-gray-400'; return <span className={cn("text-[10px] font-mono", c2)} title={`DI+ ${diPlus.toFixed(0)} - DI- ${diMinus.toFixed(0)}`}>{sp >= 0 ? '+' : ''}{sp.toFixed(0)}</span> })() : dash}</td>}
+                            {col('adx_minus_dim') && <td className="px-1 py-1 text-center">{adx != null && diMinus != null ? (() => { const ad = adx - diMinus; const c3 = ad >= 30 ? 'text-green-400' : ad >= 15 ? 'text-yellow-400' : ad < 0 ? 'text-red-400' : 'text-gray-400'; return <span className={cn("text-[10px] font-mono", c3)} title={`ADX ${adx.toFixed(0)} - DI- ${diMinus.toFixed(0)}`}>{ad >= 0 ? '+' : ''}{ad.toFixed(0)}</span> })() : dash}</td>}
                             {col('rsi') && <td className="px-1 py-1 text-center">{rsi ? <span className={cn("text-[10px] font-mono", rsi >= 70 ? 'text-red-400' : rsi <= 30 ? 'text-green-400' : 'text-gray-400')}>{rsi.toFixed(0)}</span> : dash}</td>}
                             {col('change24h') && <td className="px-1 py-1 text-center">{fp.change_24h_pct != null ? <span className={cn("text-[10px] font-mono", fp.change_24h_pct >= 5 ? 'text-green-400' : fp.change_24h_pct <= -5 ? 'text-red-400' : 'text-gray-400')}>{fp.change_24h_pct >= 0 ? '+' : ''}{fp.change_24h_pct.toFixed(1)}%</span> : dash}</td>}
                             {col('body4h') && <td className="px-1 py-1 text-center">{fp.candle_4h_body_pct != null ? <span className={cn("text-[10px] font-mono", fp.candle_4h_direction === 'green' ? 'text-green-400' : 'text-red-400')}>{fp.candle_4h_body_pct.toFixed(1)}%</span> : dash}</td>}
@@ -1404,6 +2449,26 @@ export default function OpenClawPageClient() {
                             })()}
                             {col('pnl_max') && <td className="px-1 py-1 text-right">{d.pnl_max != null ? (<div><span className={cn("font-mono text-[10px]", (d.pnl_max||0) >= 0 ? 'text-green-400/70' : 'text-red-400/70')}>{(d.pnl_max||0) >= 0 ? '+' : ''}{(d.pnl_max||0).toFixed(1)}%</span>{d.pnl_max_at && d.timestamp ? (() => { const h = (new Date(d.pnl_max_at).getTime() - new Date(d.timestamp).getTime()) / 3600000; const dj = Math.floor(h/24); const dh = Math.floor(h%24); return <div className="text-[8px] text-gray-500">{dj > 0 ? `${dj}j${dh}h` : `${dh}h`}</div> })() : null}</div>) : dash}</td>}
                             {col('tv') && <td className="px-1 py-1 text-center"><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${d.pair}`} target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:text-purple-300 text-[10px]" onClick={e => e.stopPropagation()}>📊</a></td>}
+                            {/* ─── Tier 3 cells ─── */}
+                            {col('prog') && <td className="px-1 py-1 text-center text-[10px]">{fp.prog_count_effective != null ? <span className={cn('font-bold', fp.prog_count_effective >= 4 ? 'text-green-400' : fp.prog_count_effective >= 3 ? 'text-yellow-400' : 'text-red-400')}>{fp.prog_count_effective}/5</span> : dash}</td>}
+                            {col('bonus_n') && <td className="px-1 py-1 text-center text-[10px]">{fp.bonus_count != null ? <span className={cn('font-mono', fp.bonus_count >= 12 ? 'text-green-400' : fp.bonus_count >= 8 ? 'text-yellow-400' : 'text-gray-400')}>{fp.bonus_count}</span> : dash}</td>}
+                            {col('fib4h') && <td className="px-1 py-1 text-center text-[10px]">{fp.fib_4h_bonus === true ? <span className="text-yellow-400">✓</span> : fp.fib_4h_bonus === false ? <span className="text-gray-600">✗</span> : dash}</td>}
+                            {col('fib1h') && <td className="px-1 py-1 text-center text-[10px]">{fp.fib_1h_bonus === true ? <span className="text-yellow-400">✓</span> : fp.fib_1h_bonus === false ? <span className="text-gray-600">✗</span> : dash}</td>}
+                            {col('vp4h') && <td className="px-1 py-1 text-center text-[9px]">{fp.vp_4h_position ? <span className={cn('px-1 rounded', fp.vp_4h_position === 'IN_VA' ? 'bg-purple-500/20 text-purple-300' : fp.vp_4h_position === 'ABOVE_VAH' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300')}>{fp.vp_4h_position === 'IN_VA' ? 'IN' : fp.vp_4h_position === 'ABOVE_VAH' ? '↑' : '↓'}</span> : dash}</td>}
+                            {col('vp1h') && <td className="px-1 py-1 text-center text-[9px]">{fp.vp_1h_position ? <span className={cn('px-1 rounded', fp.vp_1h_position === 'IN_VA' ? 'bg-purple-500/20 text-purple-300' : fp.vp_1h_position === 'ABOVE_VAH' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300')}>{fp.vp_1h_position === 'IN_VA' ? 'IN' : fp.vp_1h_position === 'ABOVE_VAH' ? '↑' : '↓'}</span> : dash}</td>}
+                            {col('ob4h') && <td className="px-1 py-1 text-center text-[9px]">{fp.ob_4h_position ? <span className={cn('px-1 rounded', fp.ob_4h_strength === 'STRONG' ? 'bg-orange-500/20 text-orange-300' : 'bg-gray-700/40 text-gray-300')}>{fp.ob_4h_position === 'INSIDE' ? '○' : fp.ob_4h_position === 'ABOVE' ? '↑' : '↓'}{fp.ob_4h_strength?.[0] ?? ''}</span> : dash}</td>}
+                            {col('ob1h') && <td className="px-1 py-1 text-center text-[9px]">{fp.ob_1h_position ? <span className={cn('px-1 rounded', fp.ob_1h_strength === 'STRONG' ? 'bg-orange-500/20 text-orange-300' : 'bg-gray-700/40 text-gray-300')}>{fp.ob_1h_position === 'INSIDE' ? '○' : fp.ob_1h_position === 'ABOVE' ? '↑' : '↓'}{fp.ob_1h_strength?.[0] ?? ''}</span> : dash}</td>}
+                            {col('macd4h') && <td className="px-1 py-1 text-center text-[10px]">{fp.macd_4h_trend ? <span className={cn(fp.macd_4h_trend === 'BULLISH' ? 'text-green-400' : 'text-red-400')}>{fp.macd_4h_trend === 'BULLISH' ? '🟢' : '🔴'}{fp.macd_4h_growing ? '↑' : ''}</span> : dash}</td>}
+                            {col('macd1h') && <td className="px-1 py-1 text-center text-[10px]">{fp.macd_1h_trend ? <span className={cn(fp.macd_1h_trend === 'BULLISH' ? 'text-green-400' : 'text-red-400')}>{fp.macd_1h_trend === 'BULLISH' ? '🟢' : '🔴'}{fp.macd_1h_growing ? '↑' : ''}</span> : dash}</td>}
+                            {col('stoch4h') && <td className="px-1 py-1 text-center text-[9px]">{fp.stochrsi_4h_zone ? <span className={cn('px-1 rounded', fp.stochrsi_4h_zone === 'OVERSOLD' ? 'bg-emerald-500/20 text-emerald-300' : fp.stochrsi_4h_zone === 'OVERBOUGHT' ? 'bg-red-500/20 text-red-300' : 'bg-gray-700/40 text-gray-300')}>{fp.stochrsi_4h_zone === 'OVERSOLD' ? 'OS' : fp.stochrsi_4h_zone === 'OVERBOUGHT' ? 'OB' : 'N'}{fp.stochrsi_4h_k != null ? <span className="text-[8px] text-gray-500 ml-0.5">{Math.round(fp.stochrsi_4h_k)}</span> : ''}</span> : dash}</td>}
+                            {col('stoch1h') && <td className="px-1 py-1 text-center text-[9px]">{fp.stochrsi_1h_zone ? <span className={cn('px-1 rounded', fp.stochrsi_1h_zone === 'OVERSOLD' ? 'bg-emerald-500/20 text-emerald-300' : fp.stochrsi_1h_zone === 'OVERBOUGHT' ? 'bg-red-500/20 text-red-300' : 'bg-gray-700/40 text-gray-300')}>{fp.stochrsi_1h_zone === 'OVERSOLD' ? 'OS' : fp.stochrsi_1h_zone === 'OVERBOUGHT' ? 'OB' : 'N'}{fp.stochrsi_1h_k != null ? <span className="text-[8px] text-gray-500 ml-0.5">{Math.round(fp.stochrsi_1h_k)}</span> : ''}</span> : dash}</td>}
+                            {col('ema_st4h') && <td className="px-1 py-1 text-center text-[10px]">{fp.ema_stack_4h_count != null ? <span className={cn('font-mono', fp.ema_stack_4h_count >= 4 ? 'text-green-400 font-bold' : fp.ema_stack_4h_count >= 2 ? 'text-yellow-400' : 'text-gray-500')}>{fp.ema_stack_4h_count}/4</span> : dash}</td>}
+                            {col('ema_st1h') && <td className="px-1 py-1 text-center text-[10px]">{fp.ema_stack_1h_count != null ? <span className={cn('font-mono', fp.ema_stack_1h_count >= 4 ? 'text-green-400 font-bold' : fp.ema_stack_1h_count >= 2 ? 'text-yellow-400' : 'text-gray-500')}>{fp.ema_stack_1h_count}/4</span> : dash}</td>}
+                            {col('bb4h') && <td className="px-1 py-1 text-center text-[10px]">{fp.bb_4h_squeeze === true ? <span className="text-cyan-400">⚡</span> : fp.bb_4h_squeeze === false ? <span className="text-gray-600">·</span> : dash}</td>}
+                            {col('fvg4h') && <td className="px-1 py-1 text-center text-[9px]">{fp.fvg_4h_position ? <span className={cn('px-1 rounded', fp.fvg_4h_position === 'INSIDE' ? 'bg-pink-500/20 text-pink-300' : fp.fvg_4h_position === 'ABOVE' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300')}>{fp.fvg_4h_position === 'INSIDE' ? '○' : fp.fvg_4h_position === 'ABOVE' ? '↑' : '↓'}</span> : dash}</td>}
+                            {col('adx1h') && <td className="px-1 py-1 text-center text-[10px]">{fp.adx_1h != null ? <span className={cn('font-mono', fp.adx_1h >= 25 ? 'text-green-400' : fp.adx_1h >= 20 ? 'text-yellow-400' : 'text-red-400')}>{Math.round(fp.adx_1h)}</span> : dash}</td>}
+                            {col('rsi_mtf') && <td className="px-1 py-1 text-center text-[10px]">{fp.rsi_mtf_aligned_count != null ? <span className={cn('font-mono', fp.rsi_mtf_aligned_count === 3 ? 'text-green-400 font-bold' : fp.rsi_mtf_aligned_count >= 2 ? 'text-yellow-400' : 'text-gray-500')}>{fp.rsi_mtf_aligned_count}/3</span> : dash}</td>}
+                            {col('ml') && <td className="px-1 py-1 text-center text-[10px]">{fp.ml_p_success != null ? <span className={cn('font-mono', fp.ml_p_success >= 0.7 ? 'text-green-400 font-bold' : fp.ml_p_success >= 0.55 ? 'text-yellow-400' : 'text-red-400')}>{Math.round(fp.ml_p_success * 100)}%</span> : dash}</td>}
                           </>)
                         })()}
                       </tr>
