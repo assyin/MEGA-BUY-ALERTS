@@ -250,6 +250,165 @@ def render_paper_md(rows: List[Dict]) -> List[str]:
     return L
 
 
+def render_paper_pnl_md(rows: List[Dict]) -> List[str]:
+    """Phase 1 go/no-go criterion: delta WR backtest (alert_entry, partials)
+    vs paper (paper_entry, simple no-partials). Header shows coverage ratio
+    upfront so report fidelity is visible at a glance."""
+    n_total = len(rows)
+    paper_rows = [r for r in rows if r.get("paper_pnl_pct") is not None]
+    n_paper = len(paper_rows)
+    coverage_pct = (n_paper / n_total * 100) if n_total else 0
+    L = []
+    L.append("## 📊 Paper P&L vs Backtest — Phase 1 critère go/no-go")
+    L.append("")
+    if n_total == 0:
+        L.append("_Pas de trades._")
+        L.append("")
+        return L
+    n_missing = n_total - n_paper
+    L.append(f"**Couverture : {n_paper}/{n_total} trades ({coverage_pct:.0f}%)** — "
+             f"{n_missing} trades sans paper data (bot restart, Binance error à T+60s, "
+             f"ou close avant T+60s).")
+    L.append("")
+    if n_paper == 0:
+        L.append("_Pas encore de paper P&L. Lancer `scripts/backfill_paper_pnl.py` ou "
+                 "attendre les nouveaux closes après l'application du SQL._")
+        L.append("")
+        return L
+
+    # Backtest stats: existing pnl_pct (with partials)
+    bt_wins = sum(1 for r in paper_rows if (r.get("pnl_usd") or 0) > 0)
+    bt_losses = n_paper - bt_wins
+    bt_wr = bt_wins / n_paper * 100
+    bt_avg_pct = sum((r.get("pnl_pct") or 0) for r in paper_rows) / n_paper
+    bt_sum_usd = sum((r.get("pnl_usd") or 0) for r in paper_rows)
+
+    # Paper stats: simple paper_pnl_pct
+    pp_wins = sum(1 for r in paper_rows if (r.get("paper_pnl_usd") or 0) > 0)
+    pp_losses = n_paper - pp_wins
+    pp_wr = pp_wins / n_paper * 100
+    pp_avg_pct = sum((r.get("paper_pnl_pct") or 0) for r in paper_rows) / n_paper
+    pp_sum_usd = sum((r.get("paper_pnl_usd") or 0) for r in paper_rows)
+
+    delta_wins = pp_wins - bt_wins
+    delta_wr = pp_wr - bt_wr
+    delta_avg_pct = pp_avg_pct - bt_avg_pct
+    delta_sum_usd = pp_sum_usd - bt_sum_usd
+
+    L.append("| Metric              | Backtest    | Paper       | Δ        |")
+    L.append("|---------------------|------------:|------------:|---------:|")
+    L.append(f"| Trades comparés     | {n_paper}        | {n_paper}        |          |")
+    L.append(f"| Wins                | {bt_wins}        | {pp_wins}        | {delta_wins:+d}       |")
+    L.append(f"| Losses              | {bt_losses}        | {pp_losses}        | {-delta_wins:+d}       |")
+    L.append(f"| WR                  | {bt_wr:.1f}%       | {pp_wr:.1f}%       | {delta_wr:+.1f}pts |")
+    L.append(f"| Avg PnL/trade       | {bt_avg_pct:+.2f}%      | {pp_avg_pct:+.2f}%      | {delta_avg_pct:+.2f}pt  |")
+    L.append(f"| Sum P&L $           | ${bt_sum_usd:+,.2f}     | ${pp_sum_usd:+,.2f}     | ${delta_sum_usd:+,.2f}    |")
+    L.append("")
+
+    # Go/no-go check
+    abs_delta_wr = abs(delta_wr)
+    if abs_delta_wr <= 8:
+        verdict = f"✅ **PASS** — |Δ WR| = {abs_delta_wr:.1f}pts ≤ 8pts"
+    elif abs_delta_wr <= 10:
+        verdict = f"⚠️ **WATCH** — |Δ WR| = {abs_delta_wr:.1f}pts (entre 8 et 10)"
+    else:
+        verdict = f"🛑 **FAIL** — |Δ WR| = {abs_delta_wr:.1f}pts > 10 — investiguer"
+
+    L.append(f"> **Critère go/no-go Phase 1 : Δ WR ≤ 8pts → {verdict}**")
+    L.append("")
+    if n_paper < 50:
+        L.append(f"> ⏳ N={n_paper} trades paper — minimum 50 requis pour validation finale.")
+    else:
+        L.append(f"> ✅ N={n_paper} ≥ 50 trades paper — échantillon suffisant.")
+    L.append("")
+    L.append("> **Note méthodo** : `paper_pnl` est calculé en mode simple "
+             "(`(exit − paper_entry) / paper_entry`), sans propager les partials. "
+             "`pnl` backtest utilise les partials TP1/TP2. Asymétrie acceptée pour Phase 1 — "
+             "la mécanique exacte des partials avec slippage différentiel est sujet Phase 3.")
+    L.append("")
+    return L
+
+
+def render_paper_pnl_html(rows: List[Dict]) -> List[str]:
+    """HTML version of render_paper_pnl_md — coverage in big banner upfront."""
+    n_total = len(rows)
+    paper_rows = [r for r in rows if r.get("paper_pnl_pct") is not None]
+    n_paper = len(paper_rows)
+    coverage_pct = (n_paper / n_total * 100) if n_total else 0
+    H = []
+    H.append("<h2>📊 Paper P&L vs Backtest — Phase 1 critère go/no-go</h2>")
+    if n_total == 0:
+        H.append("<p><i>Pas de trades.</i></p>")
+        return H
+    n_missing = n_total - n_paper
+    # Coverage banner — color-coded
+    if coverage_pct >= 90:
+        banner_color = "rgba(74,222,128,0.15);border-left:4px solid #4ade80;color:#86efac"
+    elif coverage_pct >= 60:
+        banner_color = "rgba(251,191,36,0.15);border-left:4px solid #fbbf24;color:#fde68a"
+    else:
+        banner_color = "rgba(248,113,113,0.15);border-left:4px solid #f87171;color:#fca5a5"
+    H.append(f"<div style='margin:14px 0;padding:14px 18px;background:{banner_color};border-radius:4px;font-size:14px'>")
+    H.append(f"<b>Couverture : {n_paper}/{n_total} trades ({coverage_pct:.0f}%)</b> — "
+             f"{n_missing} trades sans paper data (bot restart, Binance error à T+60s, ou close avant T+60s).")
+    H.append("</div>")
+
+    if n_paper == 0:
+        H.append("<p style='color:#fcd34d'><i>Pas encore de paper P&L. Lancer "
+                 "<code>scripts/backfill_paper_pnl.py</code> ou attendre les nouveaux closes "
+                 "après application du SQL.</i></p>")
+        return H
+
+    # Stats
+    bt_wins = sum(1 for r in paper_rows if (r.get("pnl_usd") or 0) > 0)
+    bt_losses = n_paper - bt_wins
+    bt_wr = bt_wins / n_paper * 100
+    bt_avg_pct = sum((r.get("pnl_pct") or 0) for r in paper_rows) / n_paper
+    bt_sum_usd = sum((r.get("pnl_usd") or 0) for r in paper_rows)
+    pp_wins = sum(1 for r in paper_rows if (r.get("paper_pnl_usd") or 0) > 0)
+    pp_losses = n_paper - pp_wins
+    pp_wr = pp_wins / n_paper * 100
+    pp_avg_pct = sum((r.get("paper_pnl_pct") or 0) for r in paper_rows) / n_paper
+    pp_sum_usd = sum((r.get("paper_pnl_usd") or 0) for r in paper_rows)
+
+    delta_wins = pp_wins - bt_wins
+    delta_wr = pp_wr - bt_wr
+    delta_avg_pct = pp_avg_pct - bt_avg_pct
+    delta_sum_usd = pp_sum_usd - bt_sum_usd
+
+    H.append("<table>")
+    H.append("<tr><th>Metric</th><th style='text-align:right'>Backtest</th><th style='text-align:right'>Paper</th><th style='text-align:right'>Δ</th></tr>")
+    H.append(f"<tr><td>Trades comparés</td><td style='text-align:right'>{n_paper}</td><td style='text-align:right'>{n_paper}</td><td></td></tr>")
+    H.append(f"<tr><td>Wins</td><td style='text-align:right'>{bt_wins}</td><td style='text-align:right'>{pp_wins}</td><td style='text-align:right'>{delta_wins:+d}</td></tr>")
+    H.append(f"<tr><td>Losses</td><td style='text-align:right'>{bt_losses}</td><td style='text-align:right'>{pp_losses}</td><td style='text-align:right'>{-delta_wins:+d}</td></tr>")
+    H.append(f"<tr><td><b>WR</b></td><td style='text-align:right'><b>{bt_wr:.1f}%</b></td><td style='text-align:right'><b>{pp_wr:.1f}%</b></td><td style='text-align:right'><b>{delta_wr:+.1f}pts</b></td></tr>")
+    H.append(f"<tr><td>Avg PnL/trade</td><td style='text-align:right'>{bt_avg_pct:+.2f}%</td><td style='text-align:right'>{pp_avg_pct:+.2f}%</td><td style='text-align:right'>{delta_avg_pct:+.2f}pt</td></tr>")
+    H.append(f"<tr><td>Sum P&L $</td><td style='text-align:right'>${bt_sum_usd:+,.2f}</td><td style='text-align:right'>${pp_sum_usd:+,.2f}</td><td style='text-align:right'>${delta_sum_usd:+,.2f}</td></tr>")
+    H.append("</table>")
+
+    # Go/no-go verdict
+    abs_delta_wr = abs(delta_wr)
+    if abs_delta_wr <= 8:
+        verdict_html = f"<span style='color:#4ade80'>✅ <b>PASS</b> — |Δ WR| = {abs_delta_wr:.1f}pts ≤ 8pts</span>"
+    elif abs_delta_wr <= 10:
+        verdict_html = f"<span style='color:#fbbf24'>⚠️ <b>WATCH</b> — |Δ WR| = {abs_delta_wr:.1f}pts (entre 8 et 10)</span>"
+    else:
+        verdict_html = f"<span style='color:#f87171'>🛑 <b>FAIL</b> — |Δ WR| = {abs_delta_wr:.1f}pts &gt; 10 — investiguer</span>"
+    H.append(f"<p style='font-size:14px;margin-top:12px'><b>Critère go/no-go Phase 1 (Δ WR ≤ 8pts)</b> → {verdict_html}</p>")
+
+    if n_paper < 50:
+        H.append(f"<p style='color:#fcd34d;font-size:13px'>⏳ N={n_paper} trades paper — minimum 50 requis pour validation finale.</p>")
+    else:
+        H.append(f"<p style='color:#86efac;font-size:13px'>✅ N={n_paper} ≥ 50 trades paper — échantillon suffisant.</p>")
+
+    H.append("<p style='color:#94a3b8;font-size:12px;font-style:italic;margin-top:10px'>"
+             "<b>Note méthodo</b> : <code>paper_pnl</code> est calculé en mode simple "
+             "(<code>(exit − paper_entry) / paper_entry</code>), sans propager les partials. "
+             "<code>pnl</code> backtest utilise les partials TP1/TP2. Asymétrie acceptée pour Phase 1 — "
+             "la mécanique exacte des partials avec slippage différentiel est sujet Phase 3.</p>")
+    return H
+
+
 def render_paper_html(rows: List[Dict]) -> List[str]:
     """Render paper-trading slippage stats as HTML."""
     paper_rows = [r for r in rows if r.get("paper_slippage_pct") is not None]

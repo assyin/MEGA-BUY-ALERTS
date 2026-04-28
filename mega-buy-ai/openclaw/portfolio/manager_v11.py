@@ -360,16 +360,31 @@ class _PortfolioV11Base:
         size = pos.get("size_usd", 0)
         pnl_pct = (total_realized_pnl / size * 100) if size else 0
         is_win = total_realized_pnl > 0
+
+        # Phase 1 paper P&L (simple, no partials propagation — Phase 3 sujet).
+        # Compares "if entry was at paper_entry, sell at exit_price" — used for
+        # the delta WR backtest-vs-paper go/no-go criterion. Observational only.
+        paper_entry = pos.get("paper_entry_price")
+        paper_pnl_pct = None
+        paper_pnl_usd = None
+        if paper_entry and float(paper_entry) > 0 and exit_price and size:
+            paper_pnl_pct = (exit_price - float(paper_entry)) / float(paper_entry) * 100
+            paper_pnl_usd = size * paper_pnl_pct / 100
+
+        update_payload = {
+            "status": "CLOSED", "exit_price": exit_price, "current_price": exit_price,
+            "close_reason": reason,
+            "pnl_pct": round(pnl_pct, 2),
+            "pnl_usd": round(total_realized_pnl, 2),
+            "realized_pnl_usd": round(total_realized_pnl, 2),
+            "remaining_size_pct": 0,
+            "closed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if paper_pnl_pct is not None:
+            update_payload["paper_pnl_pct"] = round(paper_pnl_pct, 2)
+            update_payload["paper_pnl_usd"] = round(paper_pnl_usd, 2)
         try:
-            self.sb.table(self.TABLE).update({
-                "status": "CLOSED", "exit_price": exit_price, "current_price": exit_price,
-                "close_reason": reason,
-                "pnl_pct": round(pnl_pct, 2),
-                "pnl_usd": round(total_realized_pnl, 2),
-                "realized_pnl_usd": round(total_realized_pnl, 2),
-                "remaining_size_pct": 0,
-                "closed_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", pos["id"]).execute()
+            self.sb.table(self.TABLE).update(update_payload).eq("id", pos["id"]).execute()
         except:
             return
 

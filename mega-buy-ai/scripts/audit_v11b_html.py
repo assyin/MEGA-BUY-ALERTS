@@ -322,11 +322,14 @@ def main():
 
     # Risk-adjusted metrics (Sharpe with caveat, Profit Factor, Calmar, streaks)
     sys.path.insert(0, str(Path(__file__).parent))
-    from _risk_metrics import compute_risk_metrics, render_html as render_risk_html, render_paper_html
+    from _risk_metrics import (compute_risk_metrics, render_html as render_risk_html,
+                                render_paper_html, render_paper_pnl_html)
     rm = compute_risk_metrics(rows, initial_capital=5000.0)
     H.extend(render_risk_html(rm))
     # Paper-trading slippage (Reco #5 Phase 1) — show even if empty
     H.extend(render_paper_html(rows))
+    # Paper P&L vs Backtest delta — Phase 1 critère go/no-go
+    H.extend(render_paper_pnl_html(rows))
 
     # BTC 24h bucket distribution — estimates layered BTC dump protection impact
     H.append("<h2>🧊 BTC dump protection — historical impact</h2>")
