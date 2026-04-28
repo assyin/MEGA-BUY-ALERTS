@@ -78,11 +78,13 @@ class PortfolioManagerV5:
             return []
 
     async def _get_price(self, pair: str) -> float:
-        try:
-            return float(requests.get("https://api.binance.com/api/v3/ticker/price",
-                params={"symbol": pair}, timeout=5).json().get("price", 0))
-        except:
-            return 0
+        def _sync():
+            try:
+                return float(requests.get("https://api.binance.com/api/v3/ticker/price",
+                    params={"symbol": pair}, timeout=5).json().get("price", 0))
+            except:
+                return 0
+        return await asyncio.to_thread(_sync)
 
     # ==================================================================
     # ULTRA GATE — Conf>=95% + Green 4H + 24h>0%

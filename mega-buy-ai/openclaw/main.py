@@ -40,6 +40,10 @@ from openclaw.portfolio.manager_v6 import PortfolioManagerV6
 from openclaw.portfolio.manager_v7 import PortfolioManagerV7
 from openclaw.portfolio.manager_v8 import PortfolioManagerV8
 from openclaw.portfolio.manager_v9 import PortfolioManagerV9
+from openclaw.portfolio.manager_v11 import (
+    PortfolioManagerV11A, PortfolioManagerV11B, PortfolioManagerV11C,
+    PortfolioManagerV11D, PortfolioManagerV11E,
+)
 from openclaw.audit.engagements import EngagementTracker
 
 
@@ -66,6 +70,11 @@ _portfolio_v6: Optional[PortfolioManagerV6] = None
 _portfolio_v7: Optional[PortfolioManagerV7] = None
 _portfolio_v8: Optional[PortfolioManagerV8] = None
 _portfolio_v9: Optional[PortfolioManagerV9] = None
+_portfolio_v11a: Optional[PortfolioManagerV11A] = None
+_portfolio_v11b: Optional[PortfolioManagerV11B] = None
+_portfolio_v11c: Optional[PortfolioManagerV11C] = None
+_portfolio_v11d: Optional[PortfolioManagerV11D] = None
+_portfolio_v11e: Optional[PortfolioManagerV11E] = None
 _v6v7_reporter: Optional[V6V7Reporter] = None
 _engagements: Optional[EngagementTracker] = None
 
@@ -73,7 +82,7 @@ _engagements: Optional[EngagementTracker] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle."""
-    global _agent, _bot, _listener, _processor, _tracker, _memory, _chat, _auto_bt, _watchdog, _self_trainer, _daily_reporter, _hourly_reporter, _timing, _portfolio, _portfolio_v2, _portfolio_v3, _portfolio_v4, _portfolio_v5, _portfolio_v6, _portfolio_v7, _portfolio_v8, _portfolio_v9, _v6v7_reporter, _engagements
+    global _agent, _bot, _listener, _processor, _tracker, _memory, _chat, _auto_bt, _watchdog, _self_trainer, _daily_reporter, _hourly_reporter, _timing, _portfolio, _portfolio_v2, _portfolio_v3, _portfolio_v4, _portfolio_v5, _portfolio_v6, _portfolio_v7, _portfolio_v8, _portfolio_v9, _portfolio_v11a, _portfolio_v11b, _portfolio_v11c, _portfolio_v11d, _portfolio_v11e, _v6v7_reporter, _engagements
 
     settings = get_settings()
     print("=" * 60)
@@ -100,7 +109,20 @@ async def lifespan(app: FastAPI):
     _portfolio_v7 = PortfolioManagerV7(telegram_bot=_bot)
     _portfolio_v8 = PortfolioManagerV8(telegram_bot=_bot)
     _portfolio_v9 = PortfolioManagerV9(telegram_bot=_bot)
-    _processor = AlertProcessor(_agent, _bot, cb, _memory, portfolio=_portfolio, portfolio_v2=_portfolio_v2, portfolio_v3=_portfolio_v3, portfolio_v4=_portfolio_v4, portfolio_v5=_portfolio_v5, portfolio_v6=_portfolio_v6, portfolio_v7=_portfolio_v7, portfolio_v8=_portfolio_v8, portfolio_v9=_portfolio_v9)
+    _portfolio_v11a = PortfolioManagerV11A(telegram_bot=_bot)
+    _portfolio_v11b = PortfolioManagerV11B(telegram_bot=_bot)
+    _portfolio_v11c = PortfolioManagerV11C(telegram_bot=_bot)
+    _portfolio_v11d = PortfolioManagerV11D(telegram_bot=_bot)
+    _portfolio_v11e = PortfolioManagerV11E(telegram_bot=_bot)
+    _processor = AlertProcessor(
+        _agent, _bot, cb, _memory,
+        portfolio=_portfolio, portfolio_v2=_portfolio_v2, portfolio_v3=_portfolio_v3,
+        portfolio_v4=_portfolio_v4, portfolio_v5=_portfolio_v5, portfolio_v6=_portfolio_v6,
+        portfolio_v7=_portfolio_v7, portfolio_v8=_portfolio_v8, portfolio_v9=_portfolio_v9,
+        portfolio_v11a=_portfolio_v11a, portfolio_v11b=_portfolio_v11b,
+        portfolio_v11c=_portfolio_v11c, portfolio_v11d=_portfolio_v11d,
+        portfolio_v11e=_portfolio_v11e,
+    )
     _tracker = OutcomeTracker(_memory, cb, telegram_bot=_bot)
     _listener = AlertListener(on_new_alert=_processor.process_alert)
 
@@ -157,6 +179,11 @@ async def lifespan(app: FastAPI):
     await _portfolio_v7.start()
     await _portfolio_v8.start()
     await _portfolio_v9.start()
+    await _portfolio_v11a.start()
+    await _portfolio_v11b.start()
+    await _portfolio_v11c.start()
+    await _portfolio_v11d.start()
+    await _portfolio_v11e.start()
     await _v6v7_reporter.start()
     await _engagements.start()
 
@@ -194,6 +221,11 @@ async def lifespan(app: FastAPI):
         await _portfolio_v6.stop()
     if _portfolio_v7:
         await _portfolio_v7.stop()
+    if _portfolio_v11a: await _portfolio_v11a.stop()
+    if _portfolio_v11b: await _portfolio_v11b.stop()
+    if _portfolio_v11c: await _portfolio_v11c.stop()
+    if _portfolio_v11d: await _portfolio_v11d.stop()
+    if _portfolio_v11e: await _portfolio_v11e.stop()
     if _v6v7_reporter:
         await _v6v7_reporter.stop()
     if _engagements:
@@ -216,7 +248,8 @@ app.add_middleware(
 
 
 @app.get("/health")
-async def health():
+def health():
+    # Sync endpoint — runs in threadpool, not blocked by event loop sync-I/O
     return {"status": "ok", "service": "openclaw"}
 
 
@@ -236,12 +269,87 @@ async def refresh_outcomes():
 async def status():
     if not _memory:
         return {"status": "not initialized"}
-    cb = CircuitBreaker(_memory)
+    settings = get_settings()
+    cb = CircuitBreaker(_memory, settings.max_daily_losses, settings.max_weekly_losses)
     return {
         "status": "running",
         "circuit_breaker": cb.get_status(),
         "memory": _memory.get_stats(),
     }
+
+
+@app.post("/backfill")
+async def backfill_alerts(hours: int = 24, min_score: int = 6, limit: int = 50, dry_run: bool = False):
+    """Replay missed alerts from the last N hours that were never processed by OpenClaw.
+
+    Fetches alerts newer than `hours` ago from Supabase, skips those whose id is already in
+    agent_memory.alert_id, filters by score and tradability, then dispatches them through the
+    normal AlertProcessor (same path as AlertListener). Use dry_run=true to preview only.
+    """
+    if not _processor or not _listener:
+        return {"error": "Processor/listener not initialized"}
+
+    from datetime import timedelta
+    from openclaw.pipeline.pair_filter import is_tradable, STABLECOIN_BLACKLIST
+
+    sb = _listener.sb
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+    try:
+        processed_res = sb.table("agent_memory").select("alert_id").not_.is_("alert_id", "null").execute()
+        already_processed = {r["alert_id"] for r in (processed_res.data or []) if r.get("alert_id")}
+
+        res = sb.table("alerts").select("*, decisions(*)") \
+            .gte("alert_timestamp", cutoff) \
+            .order("alert_timestamp", desc=True) \
+            .limit(500).execute()
+
+        candidates = []
+        seen_pair_bougie = set()
+        for alert in (res.data or []):
+            aid = alert.get("id")
+            pair = alert.get("pair", "")
+            score = alert.get("scanner_score", 0) or 0
+            if not aid or aid in already_processed:
+                continue
+            if pair in STABLECOIN_BLACKLIST or not is_tradable(pair):
+                continue
+            if score < min_score:
+                continue
+            dedup_key = f"{pair}_{alert.get('bougie_4h','')}"
+            if dedup_key in seen_pair_bougie:
+                continue
+            seen_pair_bougie.add(dedup_key)
+            candidates.append(alert)
+
+        candidates.sort(key=lambda a: (a.get("scanner_score", 0), len(a.get("timeframes", []) or [])), reverse=True)
+        to_process = candidates[:limit]
+
+        preview = [{"pair": a.get("pair"), "score": a.get("scanner_score"),
+                    "tfs": a.get("timeframes"), "ts": a.get("alert_timestamp")} for a in to_process]
+
+        if dry_run:
+            return {"hours": hours, "min_score": min_score, "found": len(candidates),
+                    "would_process": len(to_process), "preview": preview}
+
+        async def _run():
+            sem = asyncio.Semaphore(3)
+            async def _one(a):
+                async with sem:
+                    try:
+                        print(f"🔁 Backfill: {a.get('pair')} {a.get('scanner_score')}/10")
+                        _listener._seen_ids.add(a.get("id"))
+                        await _processor.process_alert(a)
+                    except Exception as e:
+                        print(f"⚠️ Backfill error {a.get('pair')}: {e}")
+            await asyncio.gather(*[_one(a) for a in to_process], return_exceptions=True)
+            print(f"✅ Backfill done: {len(to_process)} alerts replayed")
+
+        asyncio.create_task(_run())
+        return {"status": "started", "hours": hours, "min_score": min_score,
+                "found": len(candidates), "processing": len(to_process), "preview": preview}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.post("/analyze/{pair}")
@@ -639,8 +747,8 @@ async def get_report(report_id: str):
 
 
 @app.get("/watchdog")
-async def watchdog_status():
-    """Get watchdog status — all services health."""
+def watchdog_status():
+    """Get watchdog status — all services health. Sync = runs in threadpool."""
     if not _watchdog:
         return {"watchdog_active": False}
     return _watchdog.get_status()

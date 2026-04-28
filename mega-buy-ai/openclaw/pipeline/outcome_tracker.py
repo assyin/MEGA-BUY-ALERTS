@@ -82,19 +82,24 @@ class OutcomeTracker:
         if not pending:
             return
 
-        # Batch fetch all unique pair prices
+        # Batch fetch all unique pair prices — offload to thread so event loop stays free
         pairs = list(set(p.get("pair", "") for p in pending if p.get("pair")))
-        prices = {}
-        for pair in pairs:
-            try:
-                r = requests.get(
-                    f"{self.settings.binance_api_url}/api/v3/ticker/price",
-                    params={"symbol": pair}, timeout=5
-                )
-                prices[pair] = float(r.json().get("price", 0))
-                time.sleep(0.05)  # Rate limiting
-            except Exception:
-                pass
+
+        def _fetch_prices_sync(pair_list):
+            out = {}
+            for pair in pair_list:
+                try:
+                    r = requests.get(
+                        f"{self.settings.binance_api_url}/api/v3/ticker/price",
+                        params={"symbol": pair}, timeout=5
+                    )
+                    out[pair] = float(r.json().get("price", 0))
+                    time.sleep(0.05)
+                except Exception:
+                    pass
+            return out
+
+        prices = await asyncio.to_thread(_fetch_prices_sync, pairs)
 
         updated = 0
         wins = 0
@@ -287,17 +292,23 @@ class OutcomeTracker:
         missed = 0
         correct = 0
 
+        def _fetch_price_sync(pair):
+            try:
+                r = requests.get(
+                    f"{self.settings.binance_api_url}/api/v3/ticker/price",
+                    params={"symbol": pair}, timeout=5
+                )
+                return float(r.json().get("price", 0))
+            except Exception:
+                return 0
+
         for pattern in watch_patterns:
             pair = pattern.get("pair", "")
             if not pair:
                 continue
 
             try:
-                r = requests.get(
-                    f"{self.settings.binance_api_url}/api/v3/ticker/price",
-                    params={"symbol": pair}, timeout=5
-                )
-                current_price = float(r.json().get("price", 0))
+                current_price = await asyncio.to_thread(_fetch_price_sync, pair)
                 if current_price <= 0:
                     continue
 

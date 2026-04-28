@@ -86,8 +86,126 @@ function formatPrice(v: number | null | undefined): string {
   return `$${n.toFixed(6)}`
 }
 
+// ─── Portfolio strategy & hypothesis info ────────────────────
+type PortfolioInfo = {
+  name: string
+  filter: string
+  hypothesis: string
+  stats?: string
+  useCase: string
+  family?: 'classic' | 'discovery'
+}
+
+const PORTFOLIO_INFO: Record<string, PortfolioInfo> = {
+  v1: {
+    name: 'V1 — Baseline Fixed TP/SL',
+    filter: 'TP +10% fixe / SL -8% fixe (aucun gate, prend toutes les alertes BUY)',
+    hypothesis: 'Stratégie de référence simple : capture la plupart des moves rapides avec un TP serré. Pas de trailing, pas de filtre. Sert de baseline pour comparer toutes les autres versions.',
+    useCase: 'Référence absolue pour mesurer le lift des autres portfolios.',
+    family: 'classic',
+  },
+  v2: {
+    name: 'V2 — Trailing TP partiel',
+    filter: 'TP partiel + Trailing Stop sur le reste',
+    hypothesis: 'Améliore V1 en sécurisant 50% du profit à +10% puis en laissant courir le reste avec un trailing stop. Capture mieux les big movers.',
+    useCase: 'Comparaison directe avec V1 : combien de PnL en plus le trailing apporte ?',
+    family: 'classic',
+  },
+  v3: {
+    name: 'V3 — Ultra Confidence',
+    filter: 'Confidence ≥ 95% + 3% × 25 positions × Timeout 48h',
+    hypothesis: 'Beaucoup de positions petites mais ultra-sélectives sur la confiance de l\'agent. La diversification compense la sélection stricte.',
+    useCase: 'Stratégie scaling : montre que beaucoup de petits trades ultra-confidents > peu de gros trades.',
+    family: 'classic',
+  },
+  v4: {
+    name: 'V4 — Quality Gate',
+    filter: 'scanner_score ≥ 8 + (VIP ou HT) + bougie 4H verte',
+    hypothesis: 'Trio de qualité : score haut + alerte VIP/HT + structure 4H verte. Ton intuition trader résumée en 3 conditions simples.',
+    stats: 'Champion historique : 69 trades / WR 62.3% / +$377 PnL réalisé',
+    useCase: 'Le portfolio le plus profitable parmi V1-V9. Référence pour V11.',
+    family: 'classic',
+  },
+  v5: {
+    name: 'V5 — Combo Strict',
+    filter: 'Confidence 95% + bougie 4H verte + change 24h > 0%',
+    hypothesis: 'Triple confirmation : agent confiant + structure 4H + dynamique 24h positive. Signal très rare mais hyper fiable.',
+    stats: 'Backtest historique : 81.8% WR',
+    useCase: 'Plus défensif que V4. Drawdown très bas mais peu de trades.',
+    family: 'classic',
+  },
+  v6: {
+    name: 'V6 — Body 4H Strong + TP +15%',
+    filter: 'Body 4H ≥ 3% + TP fixe +15% / 12 slots × 8% × $5K',
+    hypothesis: 'Une grosse bougie 4H = momentum confirmé, donc TP plus haut (+15% au lieu de +10%) capture mieux le potentiel.',
+    useCase: 'Test de la thèse "momentum continuation" avec un TP étendu.',
+    family: 'classic',
+  },
+  v7: {
+    name: 'V7 — Body 4H + Hybrid Trailing',
+    filter: 'Body 4H ≥ 3% + TP1 50%@+10% / TP2 30%@+20% / Trail 20% à -8%',
+    hypothesis: 'Même filtre que V6 mais exit hybride : sécurise progressivement le profit tout en gardant 20% pour les moonshots.',
+    useCase: 'Compare V6 (fixe) vs V7 (hybride) : combien le trailing apporte sur les big movers.',
+    family: 'classic',
+  },
+  v8: {
+    name: 'V8 — V6 + Ultra Filter Macro',
+    filter: 'V6 + ADX 15-35 + BTC Bull + 24h ≥ 1%',
+    hypothesis: 'Ajoute un filtre macro (BTC bullish) et un range ADX modéré (pas de surchauffe). Évite de trader dans les conditions de marché défavorables.',
+    useCase: 'Test : un filtre macro améliore-t-il un bon filtre micro ?',
+    family: 'classic',
+  },
+  v9: {
+    name: 'V9 — V7 + Ultra Filter Macro',
+    filter: 'V7 hybrid TP + filtre macro V8 (BTC bull, ADX 15-35, 24h ≥ 1%)',
+    hypothesis: 'Combinaison ultime : exit hybride V7 + filtre macro V8. Le meilleur des deux mondes en théorie.',
+    useCase: 'Confirmation que macro + hybrid = top combo dans la famille classique.',
+    family: 'classic',
+  },
+  v11a: {
+    name: 'V11a Custom — Continuation thesis',
+    filter: 'DI+ 37-50 + DI- ≤14 + ADX≥15 + RSI≤79 + 24h≤36% + Body 4H≥2.7% + STC pas oversold + PP+EC + 4H green + 15m TF + vol non-rouge',
+    hypothesis: 'Ton intuition trader originale : capturer une continuation d\'une tendance haussière établie. STC pas en oversold = on n\'achète pas le bottom, on rejoint un mouvement déjà confirmé.',
+    stats: 'Discovery : N=24 / WR 75% / lift +13pts / p=0.10 (samples limités)',
+    useCase: 'Hypothèse "continuation" — référence pour comparer aux filtres "compression" V11b/c/d/e.',
+    family: 'discovery',
+  },
+  v11b: {
+    name: 'V11b Compression — Top combo discovery ⭐',
+    filter: 'Range 30m ≤ 1.89% ET Range 4h ≤ 2.58%',
+    hypothesis: 'Compression de volatilité multi-TF = breakout en préparation. Tu rentres AVANT l\'explosion, pas après. Inverse de la thèse "continuation" — c\'est la thèse "coiling spring".',
+    stats: 'Discovery : N=247 / WR 86.6% / lift +25pts / p<0.001 ★★★ (le plus robuste)',
+    useCase: 'Le meilleur compromis statistique : bcp de samples + WR élevé + p-value très significative. Candidat principal pour scaling.',
+    family: 'discovery',
+  },
+  v11c: {
+    name: 'V11c Premium — Ultra-selective',
+    filter: 'Range 1h ≤ 1.67% ET BTC dominance ≤ 57',
+    hypothesis: 'Compression 1H + alt season favorable = setup ultra-rare et explosif. Quand BTC.D monte, le filtre se ferme automatiquement (pas de trade en BTC trend).',
+    stats: 'Discovery : N=55 / WR 96.4% / lift +35pts / p<0.001 ★★★',
+    useCase: 'WR le plus haut du dataset. Très sélectif (1-2 trades/jour max). Idéal pour conviction maximale, pas pour volume.',
+    family: 'discovery',
+  },
+  v11d: {
+    name: 'V11d Accum Breakout',
+    filter: 'Accumulation ≥ 3.7 jours ET Range 30m ≤ 1.46%',
+    hypothesis: 'Une longue accumulation (>3.7j en range serré) + compression intraday = phase de distribution → breakout imminent. Pattern Wyckoff classique.',
+    stats: 'Discovery : N=67 / WR 94% / lift +32pts / p<0.001 ★★★',
+    useCase: 'Le pattern le plus "lisible" pour un trader. Visualisable sur un graphique 4H : range serré pendant plusieurs jours.',
+    family: 'discovery',
+  },
+  v11e: {
+    name: 'V11e BB Squeeze 4H',
+    filter: 'Bollinger Bands width 4H ≤ 13.56%',
+    hypothesis: 'Compression Bollinger = volatilité expectée à exploser. Indicateur classique John Bollinger : "low volatility leads to high volatility".',
+    stats: 'Discovery : N=118 / WR 85.6% / lift +24pts / p<0.001 ★★★',
+    useCase: 'Test simple basé sur UN seul indicateur (BB width). Robuste mais moins discriminant que V11b.',
+    family: 'discovery',
+  },
+}
+
 export default function PortfolioPageClient() {
-  const [version, setVersion] = useState<'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9'>('v1')
+  const [version, setVersion] = useState<'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9' | 'v11a' | 'v11b' | 'v11c' | 'v11d' | 'v11e'>('v1')
   const [state, setState] = useState<PortfolioState | null>(null)
   const [positions, setPositions] = useState<Position[]>([])
   const [history, setHistory] = useState<Position[]>([])
@@ -95,6 +213,7 @@ export default function PortfolioPageClient() {
   const [refreshing, setRefreshing] = useState(false)
   const [tab, setTab] = useState<'overview' | 'positions' | 'history' | 'stats'>('overview')
   const [closingId, setClosingId] = useState<string | null>(null)
+  const [showStrategyInfo, setShowStrategyInfo] = useState<boolean>(true)
 
   // === FILTERS ===
   const [filterPair, setFilterPair] = useState('')
@@ -220,6 +339,39 @@ export default function PortfolioPageClient() {
     if (closedRes.data) setHistory(closedRes.data as any[])
   }
 
+  const loadV11 = async (variant: string) => {
+    // variant ∈ {'v11a','v11b','v11c','v11d','v11e'}
+    const suffix = `_${variant}`
+    const [stateRes, openRes, closedRes] = await Promise.all([
+      supabase.from(`openclaw_portfolio_state${suffix}`).select('*').eq('id', 'main').single(),
+      supabase.from(`openclaw_positions${suffix}`).select('*').eq('status', 'OPEN').order('opened_at', { ascending: false }),
+      supabase.from(`openclaw_positions${suffix}`).select('*').eq('status', 'CLOSED').order('closed_at', { ascending: false }).limit(500),
+    ])
+    if (stateRes.data) setState(stateRes.data as any)
+    if (openRes.data) {
+      const mapped = openRes.data.map((p: any) => ({
+        ...p,
+        tp1_hit: p.partial1_done,
+        tp2_hit: p.partial2_done,
+        trailing_active: p.trail_active,
+        trailing_sl: p.trail_stop,
+        size_remaining_pct: Math.round((p.remaining_size_pct || 1) * 100),
+        pnl_realized: p.realized_pnl_usd,
+      }))
+      setPositions(mapped as any[])
+    }
+    if (closedRes.data) {
+      const mapped = closedRes.data.map((p: any) => ({
+        ...p,
+        tp1_hit: p.partial1_done,
+        tp2_hit: p.partial2_done,
+        trailing_active: p.trail_active,
+        pnl_realized: p.realized_pnl_usd,
+      }))
+      setHistory(mapped as any[])
+    }
+  }
+
   const loadV9 = async () => {
     const [stateRes, openRes, closedRes] = await Promise.all([
       supabase.from('openclaw_portfolio_state_v9').select('*').eq('id', 'main').single(),
@@ -259,7 +411,8 @@ export default function PortfolioPageClient() {
       else if (version === 'v6') await loadV6()
       else if (version === 'v7') await loadV7()
       else if (version === 'v8') await loadV8()
-      else await loadV9()
+      else if (version === 'v9') await loadV9()
+      else if (version.startsWith('v11')) await loadV11(version)
     } catch {}
     setLoading(false)
     setRefreshing(false)
@@ -448,7 +601,12 @@ export default function PortfolioPageClient() {
               version === 'v6' ? 'V6 — Body 4H≥3% + Fixed TP+15% | 12 slots × 8% × $5K' :
               version === 'v7' ? 'V7 — Body 4H≥3% + Hybrid Trailing | TP1 50%@+10% + TP2 30%@+20% + 20% Trail' :
               version === 'v8' ? 'V8 — V6 + Ultra Filter (ADX 15-35 + BTC Bull + 24h>=1%) | Fixed TP+15%' :
-              'V9 — V7 + Ultra Filter (ADX 15-35 + BTC Bull + 24h>=1%) | Hybrid Trailing'
+              version === 'v9' ? 'V9 — V7 + Ultra Filter (ADX 15-35 + BTC Bull + 24h>=1%) | Hybrid Trailing' :
+              version === 'v11a' ? 'V11a Custom — DI+ 37-50 + Body 4H≥2.7 + STC mins + PP+EC | Hybrid TP V7' :
+              version === 'v11b' ? 'V11b Compression — Range 30m≤1.89 + Range 4h≤2.58 (top combo, N=247) | Hybrid TP V7' :
+              version === 'v11c' ? 'V11c Premium — Range 1h≤1.67 + BTC.D≤57 (96.4% WR) | Hybrid TP V7' :
+              version === 'v11d' ? 'V11d Accum — Accum days≥3.7 + Range 30m≤1.46 | Hybrid TP V7' :
+              'V11e BB Squeeze — BB 4H width≤13.56 | Hybrid TP V7'
             }</p>
           </div>
         </div>
@@ -482,6 +640,23 @@ export default function PortfolioPageClient() {
             <button onClick={() => setVersion('v9')} className={cn("px-3 py-2 text-sm font-medium transition-colors", version === 'v9' ? "bg-amber-500/20 text-amber-300" : "text-gray-500 hover:text-gray-300")}>
               V9
             </button>
+            {/* ━━ Separator + V11 Discovery group ━━ */}
+            <div className="px-2 flex items-center justify-center text-cyan-400/50 text-xs font-bold border-l border-cyan-500/30 ml-1" title="V11 Discovery — discovery-driven filters with V7 hybrid TP">│</div>
+            <button onClick={() => setVersion('v11a')} title="V11a Custom — DI+ 37-50, body 4H ≥2.7, STC mins, PP+EC (continuation thesis)" className={cn("px-2.5 py-2 text-xs font-bold transition-colors", version === 'v11a' ? "bg-cyan-500/30 text-cyan-200 ring-1 ring-cyan-400" : "text-cyan-500/60 hover:text-cyan-300 hover:bg-cyan-900/20")}>
+              11a
+            </button>
+            <button onClick={() => setVersion('v11b')} title="V11b Compression — Range 30m ≤1.89 + Range 4h ≤2.58 (top combo)" className={cn("px-2.5 py-2 text-xs font-bold transition-colors", version === 'v11b' ? "bg-cyan-500/30 text-cyan-200 ring-1 ring-cyan-400" : "text-cyan-500/60 hover:text-cyan-300 hover:bg-cyan-900/20")}>
+              11b
+            </button>
+            <button onClick={() => setVersion('v11c')} title="V11c Premium — Range 1h ≤1.67 + BTC.D ≤57 (96.4% WR)" className={cn("px-2.5 py-2 text-xs font-bold transition-colors", version === 'v11c' ? "bg-cyan-500/30 text-cyan-200 ring-1 ring-cyan-400" : "text-cyan-500/60 hover:text-cyan-300 hover:bg-cyan-900/20")}>
+              11c
+            </button>
+            <button onClick={() => setVersion('v11d')} title="V11d Accum — Accum days ≥3.7 + Range 30m ≤1.46" className={cn("px-2.5 py-2 text-xs font-bold transition-colors", version === 'v11d' ? "bg-cyan-500/30 text-cyan-200 ring-1 ring-cyan-400" : "text-cyan-500/60 hover:text-cyan-300 hover:bg-cyan-900/20")}>
+              11d
+            </button>
+            <button onClick={() => setVersion('v11e')} title="V11e BB Squeeze — BB 4H width ≤13.56" className={cn("px-2.5 py-2 text-xs font-bold transition-colors", version === 'v11e' ? "bg-cyan-500/30 text-cyan-200 ring-1 ring-cyan-400" : "text-cyan-500/60 hover:text-cyan-300 hover:bg-cyan-900/20")}>
+              11e
+            </button>
           </div>
           {version === 'v1' && (
             <button onClick={handleForceCheck} className="flex items-center gap-2 px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm text-gray-300 transition-colors border border-gray-700">
@@ -493,6 +668,39 @@ export default function PortfolioPageClient() {
           </button>
         </div>
       </div>
+
+      {/* ─── Strategy & Hypothesis info panel ─── */}
+      {(() => {
+        const info = PORTFOLIO_INFO[version]
+        if (!info) return null
+        const familyColor = info.family === 'discovery'
+          ? 'border-cyan-500/30 bg-cyan-900/10'
+          : 'border-purple-500/20 bg-purple-900/5'
+        const familyText = info.family === 'discovery' ? 'text-cyan-300' : 'text-purple-300'
+        return (
+          <div className={cn("rounded-lg border p-3", familyColor)}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <span className={cn("text-sm font-bold", familyText)}>📋 {info.name}</span>
+                <span className="text-[10px] text-gray-500 px-1.5 py-0.5 rounded border border-gray-700">
+                  {info.family === 'discovery' ? '🔬 Discovery-driven' : '🧠 Manual thesis'}
+                </span>
+              </div>
+              <button onClick={() => setShowStrategyInfo(!showStrategyInfo)} className="text-[10px] text-gray-500 hover:text-gray-300">
+                {showStrategyInfo ? '▼ Masquer' : '▶ Détails'}
+              </button>
+            </div>
+            {showStrategyInfo && (
+              <div className="space-y-2 text-xs">
+                <div><span className="text-gray-500 uppercase text-[10px]">🎯 Filtre :</span><p className="text-gray-200 font-mono text-[11px] mt-0.5">{info.filter}</p></div>
+                <div><span className="text-gray-500 uppercase text-[10px]">📈 Hypothèse :</span><p className="text-gray-300 mt-0.5">{info.hypothesis}</p></div>
+                {info.stats && <div><span className="text-gray-500 uppercase text-[10px]">📊 Stats :</span><p className="text-emerald-300 font-mono text-[11px] mt-0.5">{info.stats}</p></div>}
+                <div><span className="text-gray-500 uppercase text-[10px]">💡 Use case :</span><p className="text-gray-300 mt-0.5">{info.useCase}</p></div>
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* Drawdown warning */}
       {s.drawdown_mode && (

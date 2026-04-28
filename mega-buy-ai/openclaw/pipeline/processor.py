@@ -11,13 +11,152 @@ from openclaw.telegram.bot import OpenClawBot
 from openclaw.pipeline.chart_generator import generate_alert_chart
 
 
+def _extract_analysis_features(full_analysis: dict) -> dict:
+    """Flatten the analyze_alert_realtime result into structured features for filtering.
+
+    Returns a dict that gets merged into agent_memory.features_fingerprint, giving the
+    tracker UI the ability to filter on Fibonacci, Volume Profile, EMA Stack, Cloud,
+    Order Blocks, StochRSI, MACD, BB Squeeze, FVG, ADX 1H, and progressive conditions.
+    """
+    if not isinstance(full_analysis, dict):
+        return {}
+
+    feat = {}
+
+    # ─── Entry Conditions (5 progressive validations) ───
+    ec = full_analysis.get("entry_conditions") or {}
+    if isinstance(ec, dict):
+        hard = 0; quasi = 0
+        for k in ("ema100_1h", "ema20_4h", "cloud_1h", "cloud_30m", "choch_bos"):
+            v = ec.get(k) or {}
+            if not isinstance(v, dict):
+                continue
+            valid = bool(v.get("valid"))
+            dist = v.get("distance_pct")
+            feat[f"prog_{k}_valid"] = valid
+            if isinstance(dist, (int, float)):
+                feat[f"prog_{k}_dist_pct"] = round(dist, 2)
+            if valid:
+                hard += 1
+            elif isinstance(dist, (int, float)) and dist >= -2.0:
+                quasi += 1
+        feat["prog_count_hard"] = hard
+        feat["prog_count_effective"] = hard + quasi  # with -2% tolerance
+
+    # ─── Bonus filters (Fib, OB, FVG, MACD, BB, StochRSI, EMA Stack, ADX 1H, …) ───
+    bf = full_analysis.get("bonus_filters") or {}
+    if isinstance(bf, dict):
+        feat["bonus_count"] = bf.get("count")
+        feat["bonus_total"] = bf.get("total")
+
+        # Fibonacci
+        for tf in ("1h", "4h"):
+            fib = bf.get(f"fib_{tf}") or {}
+            if isinstance(fib, dict):
+                feat[f"fib_{tf}_bonus"] = bool(fib.get("bonus"))
+                if fib.get("level") is not None:
+                    feat[f"fib_{tf}_level"] = fib.get("level")
+
+        # Order Blocks
+        for tf in ("1h", "4h"):
+            ob = bf.get(f"ob_{tf}") or {}
+            if isinstance(ob, dict):
+                feat[f"ob_{tf}_bonus"] = bool(ob.get("bonus"))
+                feat[f"ob_{tf}_count"] = ob.get("count")
+                blocks = ob.get("blocks") or []
+                if blocks and isinstance(blocks, list) and isinstance(blocks[0], dict):
+                    nb = blocks[0]
+                    feat[f"ob_{tf}_position"] = nb.get("position")    # ABOVE/INSIDE/BELOW
+                    feat[f"ob_{tf}_strength"] = nb.get("strength")    # STRONG/MEDIUM/WEAK
+                    feat[f"ob_{tf}_mitigated"] = bool(nb.get("mitigated"))
+                    if isinstance(nb.get("distance_pct"), (int, float)):
+                        feat[f"ob_{tf}_distance_pct"] = round(nb["distance_pct"], 2)
+
+        # FVG
+        for tf in ("1h", "4h"):
+            fvg = bf.get(f"fvg_{tf}") or {}
+            if isinstance(fvg, dict):
+                feat[f"fvg_{tf}_bonus"] = bool(fvg.get("bonus"))
+                feat[f"fvg_{tf}_count"] = fvg.get("count")
+                feat[f"fvg_{tf}_position"] = fvg.get("position")  # ABOVE/INSIDE/BELOW
+
+        # MACD
+        for tf in ("1h", "4h"):
+            macd = bf.get(f"macd_{tf}") or {}
+            if isinstance(macd, dict):
+                feat[f"macd_{tf}_trend"] = macd.get("trend")          # BULLISH/BEARISH
+                feat[f"macd_{tf}_growing"] = bool(macd.get("growing"))
+                if isinstance(macd.get("histogram"), (int, float)):
+                    feat[f"macd_{tf}_hist"] = round(macd["histogram"], 4)
+
+        # Bollinger Bands / Squeeze
+        for tf in ("1h", "4h"):
+            bb = bf.get(f"bb_{tf}") or {}
+            if isinstance(bb, dict):
+                feat[f"bb_{tf}_squeeze"] = bool(bb.get("squeeze"))
+                feat[f"bb_{tf}_breakout"] = bb.get("breakout")  # UP/DOWN/None
+                if isinstance(bb.get("width_pct"), (int, float)):
+                    feat[f"bb_{tf}_width_pct"] = round(bb["width_pct"], 2)
+
+        # Stoch RSI
+        for tf in ("1h", "4h"):
+            sr = bf.get(f"stochrsi_{tf}") or {}
+            if isinstance(sr, dict):
+                feat[f"stochrsi_{tf}_zone"] = sr.get("zone")  # OVERSOLD/NEUTRAL/OVERBOUGHT
+                feat[f"stochrsi_{tf}_cross"] = sr.get("cross")
+                if isinstance(sr.get("k"), (int, float)):
+                    feat[f"stochrsi_{tf}_k"] = round(sr["k"], 1)
+
+        # EMA Stack
+        for tf in ("1h", "4h"):
+            es = bf.get(f"ema_stack_{tf}") or {}
+            if isinstance(es, dict):
+                feat[f"ema_stack_{tf}_count"] = es.get("count")  # 0..4
+                feat[f"ema_stack_{tf}_trend"] = es.get("trend")  # BULLISH/MIXED/BEARISH
+
+        # ADX 1H separately (4H is already in features)
+        adx_1h = bf.get("adx_1h") or {}
+        if isinstance(adx_1h, dict):
+            for fld in ("adx", "di_plus", "di_minus", "di_spread", "strength"):
+                v = adx_1h.get(fld)
+                if v is not None:
+                    feat[f"adx_1h_{fld}" if fld != "adx" else "adx_1h"] = round(v, 2) if isinstance(v, float) else v
+
+        # RSI MTF aligned count
+        rsi_mtf = bf.get("rsi_mtf") or {}
+        if isinstance(rsi_mtf, dict):
+            feat["rsi_mtf_aligned_count"] = rsi_mtf.get("aligned_count")
+            feat["rsi_mtf_trend"] = rsi_mtf.get("trend")
+
+    # ─── Volume Profile per TF ───
+    vp = full_analysis.get("volume_profile") or {}
+    for tf in ("1h", "4h"):
+        v = vp.get(tf) or {}
+        if isinstance(v, dict) and not v.get("error") and v.get("poc"):
+            feat[f"vp_{tf}_position"] = v.get("position")  # IN_VA/ABOVE_VAH/BELOW_VAL
+            if isinstance(v.get("poc_distance_pct"), (int, float)):
+                feat[f"vp_{tf}_poc_dist_pct"] = round(v["poc_distance_pct"], 2)
+
+    # ─── ML prediction (if attached upstream) ───
+    ml = full_analysis.get("ml_prediction") or {}
+    if isinstance(ml, dict):
+        if isinstance(ml.get("p_success"), (int, float)):
+            feat["ml_p_success"] = round(ml["p_success"], 3)
+        if ml.get("decision"):
+            feat["ml_decision"] = ml.get("decision")
+
+    return {k: v for k, v in feat.items() if v is not None}
+
+
 class AlertProcessor:
     """Processes new alerts through the Claude agent pipeline."""
 
     def __init__(self, agent: ClaudeAgent, bot: OpenClawBot,
                  circuit_breaker: CircuitBreaker, memory: MemoryStore,
                  portfolio=None, portfolio_v2=None, portfolio_v3=None, portfolio_v4=None, portfolio_v5=None,
-                 portfolio_v6=None, portfolio_v7=None, portfolio_v8=None, portfolio_v9=None):
+                 portfolio_v6=None, portfolio_v7=None, portfolio_v8=None, portfolio_v9=None,
+                 portfolio_v11a=None, portfolio_v11b=None, portfolio_v11c=None,
+                 portfolio_v11d=None, portfolio_v11e=None):
         self.agent = agent
         self.bot = bot
         self.circuit_breaker = circuit_breaker
@@ -31,6 +170,12 @@ class AlertProcessor:
         self.portfolio_v7 = portfolio_v7
         self.portfolio_v8 = portfolio_v8
         self.portfolio_v9 = portfolio_v9
+        # V11 family — discovery-driven filters with V7 hybrid TP
+        self.portfolio_v11a = portfolio_v11a
+        self.portfolio_v11b = portfolio_v11b
+        self.portfolio_v11c = portfolio_v11c
+        self.portfolio_v11d = portfolio_v11d
+        self.portfolio_v11e = portfolio_v11e
 
     async def process_alert(self, alert: dict):
         """Full pipeline: analyze → decide → notify → record."""
@@ -58,6 +203,84 @@ class AlertProcessor:
             await self.bot.send_alert_notification(alert)
         except Exception:
             pass  # Non-critical
+
+        # 2b. FAST PATH V8/V9 — bypass agent, open positions immediately if gate passes
+        # The gate V8/V9 has 11 filters that are more strict than the agent.
+        # Agent adds -0.6pts WR and 30s+ latency. Direct gate → position is optimal.
+        if self.portfolio_v8 or self.portfolio_v9:
+            try:
+                from openclaw.portfolio.gate_v6 import build_gate_cache
+                _fast_cache = await asyncio.to_thread(build_gate_cache, pair)
+                alert["_gate_cache"] = _fast_cache
+
+                # Compute features needed for V8/V9 filters (STC, vol spikes) — offload to thread
+                import requests as _freq
+                def _fetch_vol_klines():
+                    try:
+                        _rv = _freq.get("https://api.binance.com/api/v3/klines",
+                            params={"symbol": pair, "interval": "1h", "limit": 48}, timeout=5)
+                        return _rv.json()
+                    except:
+                        return None
+                try:
+                    _kv = await asyncio.to_thread(_fetch_vol_klines)
+                    if _kv and isinstance(_kv, list) and len(_kv) >= 2:
+                        _vols = [float(k[7]) for k in _kv]
+                        _cur = _vols[-1]
+                        def _avg(v, n):
+                            s = v[-n:] if len(v) >= n else v
+                            return sum(s)/len(s) if s else 0
+                        _prev = _vols[:-1]
+                        for _vk, _vn in [("vol_spike_vs_1h",1),("vol_spike_vs_4h",4),("vol_spike_vs_24h",24),("vol_spike_vs_48h",len(_prev))]:
+                            _a = _avg(_prev, _vn)
+                            alert[_vk] = round((_cur/_a - 1)*100, 1) if _a > 0 else None
+                except:
+                    pass
+
+                # Fast triage decision for V8/V9 (score-based, no GPT)
+                _pp = alert.get("pp", False)
+                _ec = alert.get("ec", False)
+                if score >= 9:
+                    _fb_dec, _fb_conf = "BUY STRONG", 0.75
+                elif score >= 8 and _pp:
+                    _fb_dec, _fb_conf = "BUY", 0.65
+                elif score >= 7 and _pp and _ec:
+                    _fb_dec, _fb_conf = "BUY WEAK", 0.55
+                else:
+                    _fb_dec, _fb_conf = "WATCH", 0.30
+
+                if "BUY" in _fb_dec and _fb_conf >= 0.60:
+                    _vip = {}
+                    _quality = {}
+                    _v8_opened = False
+                    _v9_opened = False
+
+                    async def _fast_v8():
+                        nonlocal _v8_opened
+                        if self.portfolio_v8:
+                            pos = await self.portfolio_v8.try_open_position(
+                                pair=pair, decision=_fb_dec, confidence=_fb_conf,
+                                alert=alert, vip=_vip, quality=_quality)
+                            if pos:
+                                _v8_opened = True
+                                print(f"⚡ V8 FAST: {pair} ${pos['size_usd']:.0f} @ {pos['entry_price']}")
+
+                    async def _fast_v9():
+                        nonlocal _v9_opened
+                        if self.portfolio_v9:
+                            pos = await self.portfolio_v9.try_open_position(
+                                pair=pair, decision=_fb_dec, confidence=_fb_conf,
+                                alert=alert, vip=_vip, quality=_quality)
+                            if pos:
+                                _v9_opened = True
+                                print(f"⚡ V9 FAST: {pair} ${pos['size_usd']:.0f} @ {pos['entry_price']}")
+
+                    await asyncio.gather(_fast_v8(), _fast_v9(), return_exceptions=True)
+
+                    if _v8_opened or _v9_opened:
+                        print(f"⚡ FAST PATH: {pair} V8={'✅' if _v8_opened else '❌'} V9={'✅' if _v9_opened else '❌'} — {_fb_dec} ({_fb_conf*100:.0f}%)")
+            except Exception as fast_err:
+                print(f"⚠️ Fast path error for {pair}: {fast_err}")
 
         # 3. Run agent analysis — 30s timeout then instant fast triage fallback
         try:
@@ -302,6 +525,7 @@ class AlertProcessor:
                         alert.get("price", 0), "1h", 80
                     )
                     acc_data = {}
+                    analysis_features = {}
                     if full_analysis and isinstance(full_analysis, dict):
                         acc_raw = full_analysis.get("accumulation", {})
                         if isinstance(acc_raw, dict) and acc_raw.get("detected"):
@@ -310,6 +534,11 @@ class AlertProcessor:
                                 "accumulation_hours": round(acc_raw.get("hours", 0)),
                                 "accumulation_range_pct": round(acc_raw.get("range_pct", 0), 1),
                             }
+                        # ─── Extract structured indicators for tracker filtering ───
+                        try:
+                            analysis_features = _extract_analysis_features(full_analysis)
+                        except Exception as _ee:
+                            print(f"⚠️ extract_analysis_features error for {pair}: {_ee}")
                     if _chart_path:
                         await self.bot.app.bot.send_photo(
                             chat_id=self.bot.chat_id,
@@ -325,10 +554,11 @@ class AlertProcessor:
                         update_fields = {}
                         if _chart_path:
                             update_fields["chart_path"] = str(_chart_path)
-                        if acc_data:
+                        if acc_data or analysis_features:
                             existing = _sb.table("agent_memory").select("features_fingerprint").eq("alert_id", alert_id).single().execute()
                             fp = (existing.data or {}).get("features_fingerprint") or {}
-                            fp.update(acc_data)
+                            if acc_data: fp.update(acc_data)
+                            if analysis_features: fp.update(analysis_features)
                             update_fields["features_fingerprint"] = fp
                         if update_fields:
                             _sb.table("agent_memory").update(update_fields).eq("alert_id", alert_id).execute()
@@ -396,6 +626,23 @@ class AlertProcessor:
                 _try_portfolio(self.portfolio_v7, "V7", **common_q),
                 _try_portfolio(self.portfolio_v8, "V8", **common_q),
                 _try_portfolio(self.portfolio_v9, "V9", **common_q),
+                return_exceptions=True,
+            )
+
+            # V11 family — build shared cache once, then dispatch all 5 in parallel
+            try:
+                from openclaw.portfolio.gates_v11 import build_v11_cache
+                v11_cache = await asyncio.to_thread(build_v11_cache, pair)
+            except Exception as _ev:
+                print(f"⚠️ V11 cache build error for {pair}: {_ev}")
+                v11_cache = {}
+            common_v11 = dict(**common_q, v11_cache=v11_cache)
+            await asyncio.gather(
+                _try_portfolio(self.portfolio_v11a, "V11A", **common_v11),
+                _try_portfolio(self.portfolio_v11b, "V11B", **common_v11),
+                _try_portfolio(self.portfolio_v11c, "V11C", **common_v11),
+                _try_portfolio(self.portfolio_v11d, "V11D", **common_v11),
+                _try_portfolio(self.portfolio_v11e, "V11E", **common_v11),
                 return_exceptions=True,
             )
 

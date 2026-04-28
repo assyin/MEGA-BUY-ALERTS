@@ -132,4 +132,47 @@ TOOLS = [
             "required": ["alert_id", "result", "pnl_pct"]
         }
     },
+    {
+        "name": "get_recent_trades",
+        "description": "List the user's recent virtual trades from openclaw_positions tables (V1-V9 portfolios). Use this when the user asks about recent trades, positions, history, what was opened/closed in last N days. Returns pair, status, entry/exit price, pnl_pct, pnl_usd, dates.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "description": "Lookback window in days. Default 7."},
+                "version": {"type": "string", "description": "Portfolio version filter: 'all' (default, merges V1-V9), or a specific 'v1'..'v9'."},
+                "status": {"type": "string", "description": "Filter: 'all' (default), 'OPEN', 'CLOSED'."},
+                "limit": {"type": "integer", "description": "Max rows to return. Default 20."}
+            }
+        }
+    },
+    {
+        "name": "get_top_trades",
+        "description": "Top best/worst trades across portfolios over the last N days, sorted by P&L. Use this when the user asks 'best trade', 'worst trade', 'biggest winner/loser', 'meilleur trade', 'a7sen trade'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "metric": {"type": "string", "description": "'pnl_pct' (default) or 'pnl_usd'."},
+                "days": {"type": "integer", "description": "Lookback window in days. Default 7."},
+                "version": {"type": "string", "description": "'all' (default) or 'v1'..'v9'."},
+                "direction": {"type": "string", "description": "'best' (default, biggest winners) or 'worst' (biggest losers)."},
+                "limit": {"type": "integer", "description": "Max rows to return. Default 5."}
+            }
+        }
+    },
+    {
+        "name": "get_recent_alerts",
+        "description": "Query the OpenClaw TRACKER (agent_memory table) — every MEGA BUY alert + its OpenClaw decision + its computed outcome (PnL even if the portfolio didn't trade it). Use this for 'best/worst alert by PnL', 'tracker win rate', 'what alerts had biggest moves', 'meilleure alerte tracker', 'a7sen alert'. Sortable by PnL — set sort_by='pnl_max' direction='desc' to get the best-performing alerts. THIS IS DIFFERENT from get_top_trades which only sees actual portfolio trades.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "description": "Lookback window in days. Default 7."},
+                "decision": {"type": "string", "description": "Filter by agent_decision: 'all' (default), 'BUY', 'BUY STRONG', 'WATCH', 'SKIP'."},
+                "outcome": {"type": "string", "description": "Filter by outcome: 'all' (default), 'WIN', 'LOSE', 'PENDING', 'MISSED_BUY', 'CORRECT_WATCH'."},
+                "pair": {"type": "string", "description": "Filter by exact pair, e.g. 'FLOKIUSDT'. Leave empty for all pairs."},
+                "sort_by": {"type": "string", "description": "Sort column: 'timestamp' (default = most recent), 'pnl_max' (highest peak), 'pnl_at_close', 'pnl_pct', 'scanner_score', 'agent_confidence'."},
+                "direction": {"type": "string", "description": "'desc' (default, biggest first) or 'asc' (smallest first)."},
+                "limit": {"type": "integer", "description": "Max rows to return. Default 20."}
+            }
+        }
+    },
 ]

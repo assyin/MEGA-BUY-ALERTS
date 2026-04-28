@@ -48,6 +48,8 @@ except Exception as e:
 # ═══════════════════════════════════════════════════════
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "COLLE_TON_TOKEN_ICI")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "COLLE_TON_CHAT_ID_ICI")
+# Comma-separated list of destinations (DM id, group id, channel id…). Empty entries are ignored.
+TELEGRAM_CHAT_IDS = [c.strip() for c in TELEGRAM_CHAT_ID.split(",") if c.strip()]
 
 # Google Sheets — Logging des alertes
 GOOGLE_SHEETS_ENABLED = True
@@ -117,10 +119,39 @@ MAX_CANDLE_MOVE_PCT = 15.0
 # ═══════════════════════════════════════════════════════
 BINANCE_BASE = "https://api.binance.com"
 
-# Session HTTP avec connection pooling (thread-safe)
+# Session HTTP avec connection pooling + retry agressif (thread-safe)
+# Retry sur connect errors, read errors, 429, 5xx — backoff exponentiel (0.5s, 1s, 2s, 4s)
+from urllib3.util.retry import Retry as _Retry
 _http_session = requests.Session()
+_http_retry = _Retry(
+    total=4, connect=4, read=3, status=3,
+    backoff_factor=0.5,
+    status_forcelist=(429, 500, 502, 503, 504),
+    allowed_methods=frozenset(["GET", "POST"]),
+    raise_on_status=False,
+)
 _http_session.mount('https://', requests.adapters.HTTPAdapter(
-    pool_connections=20, pool_maxsize=20, max_retries=2))
+    pool_connections=20, pool_maxsize=20, max_retries=_http_retry))
+_http_session.mount('http://', requests.adapters.HTTPAdapter(
+    pool_connections=20, pool_maxsize=20, max_retries=_http_retry))
+
+
+def _retry_request(method, url, *, max_attempts=3, base_delay=1.0, **kwargs):
+    """App-level retry for transient network errors (DNS, name resolution, timeouts).
+    urllib3 Retry handles connection-level failures but NOT DNS NXDOMAIN — so we wrap."""
+    last_err = None
+    for attempt in range(max_attempts):
+        try:
+            return _http_session.request(method, url, **kwargs)
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.ChunkedEncodingError) as e:
+            last_err = e
+            if attempt < max_attempts - 1:
+                delay = base_delay * (2 ** attempt)
+                print(f"  🔁 Retry {attempt+1}/{max_attempts} on {url[:60]}... in {delay:.1f}s ({type(e).__name__})")
+                time.sleep(delay)
+    raise last_err
 
 
 def _get_trading_symbols():
@@ -128,7 +159,7 @@ def _get_trading_symbols():
     Excludes delisted pairs (BREAK status)."""
     try:
         url = f"{BINANCE_BASE}/api/v3/exchangeInfo"
-        resp = _http_session.get(url, timeout=15)
+        resp = _retry_request("GET", url, timeout=15, max_attempts=3, base_delay=2.0)
         data = resp.json()
         return {s["symbol"] for s in data.get("symbols", [])
                 if s.get("status") == "TRADING" and s["symbol"].endswith("USDT")}
@@ -141,7 +172,7 @@ _trading_cache_time = 0
 def get_24h_volumes():
     global _trading_cache, _trading_cache_time
     url = f"{BINANCE_BASE}/api/v3/ticker/24hr"
-    resp = _http_session.get(url, timeout=30)
+    resp = _retry_request("GET", url, timeout=30, max_attempts=3, base_delay=2.0)
     data = resp.json()
 
     # Refresh trading status cache every hour
@@ -165,7 +196,7 @@ def get_24h_volumes():
 def get_klines(symbol, interval="30m", limit=200):
     url = f"{BINANCE_BASE}/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
-    resp = _http_session.get(url, params=params, timeout=15)
+    resp = _retry_request("GET", url, params=params, timeout=15, max_attempts=2, base_delay=0.5)
     data = resp.json()
     if not isinstance(data, list) or len(data) < 50:
         return None
@@ -611,7 +642,6 @@ def push_alerts_to_supabase(sorted_signals, candle_key):
 
     now_ts = datetime.now(timezone.utc).isoformat()
 
-    filtered_out = 0
     for symbol, tf_results in sorted_signals:
         try:
             # Get best score across all TFs
@@ -623,21 +653,6 @@ def push_alerts_to_supabase(sorted_signals, candle_key):
             best_tf_key = max(tf_results.keys(), key=lambda t: (tf_results[t]["score"], tf_priority.get(t, 0)))
             first_tf = tf_results[best_tf_key]
             conditions = first_tf.get("conditions", {})
-
-            # Pre-filter: skip dead candles (no real movement)
-            # Fetch current 4H candle body to check if there's actual movement
-            try:
-                _r4h = requests.get("https://api.binance.com/api/v3/klines",
-                    params={"symbol": symbol, "interval": "4h", "limit": 1}, timeout=5)
-                _k4h = _r4h.json()
-                if _k4h and isinstance(_k4h, list) and len(_k4h) > 0:
-                    _o4h, _c4h = float(_k4h[0][1]), float(_k4h[0][4])
-                    _body4h = abs(_c4h - _o4h) / _o4h * 100 if _o4h > 0 else 0
-                    if _body4h < 1.0:
-                        filtered_out += 1
-                        continue  # Skip dead candle — body < 1%
-            except:
-                pass
 
             # Build alert record matching Supabase schema
             # Convert numpy types to native Python types for JSON
@@ -718,26 +733,20 @@ def push_alerts_to_supabase(sorted_signals, candle_key):
         except Exception as e:
             print(f"  ⚠️ Supabase push error for {symbol}: {e}")
 
-    if filtered_out > 0:
-        print(f"  🚫 Pre-filtered {filtered_out} dead candles (body 4H < 1%)")
-
-
 # ═══════════════════════════════════════════════════════
 # 📱 TELEGRAM
 # ═══════════════════════════════════════════════════════
 def send_telegram(message):
-    if TELEGRAM_TOKEN == "COLLE_TON_TOKEN_ICI":
+    if TELEGRAM_TOKEN == "COLLE_TON_TOKEN_ICI" or not TELEGRAM_CHAT_IDS:
         print(f"[TELEGRAM DISABLED] {message}")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    try:
-        requests.post(url, json={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message,
-            "parse_mode": "HTML"
-        }, timeout=10)
-    except Exception as e:
-        print(f"❌ Telegram error: {e}")
+    for cid in TELEGRAM_CHAT_IDS:
+        payload = {"chat_id": cid, "text": message, "parse_mode": "HTML"}
+        try:
+            _retry_request("POST", url, json=payload, timeout=10, max_attempts=4, base_delay=1.5)
+        except Exception as e:
+            print(f"❌ Telegram error for {cid} (after retries): {e}")
 
 
 # ═══════════════════════════════════════════════════════
@@ -1351,7 +1360,7 @@ def main():
             while elapsed < wait_sec:
                 time.sleep(10)
                 elapsed += 10
-                check_telegram_commands()
+                # check_telegram_commands()  # désactivé: OpenClaw gère le polling Telegram (évite Conflict getUpdates)
 
             run_scan()
 

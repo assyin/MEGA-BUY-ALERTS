@@ -81,12 +81,14 @@ class PortfolioManagerV4:
             return []
 
     async def _get_price(self, pair: str) -> float:
-        try:
-            r = requests.get("https://api.binance.com/api/v3/ticker/price",
-                             params={"symbol": pair}, timeout=5)
-            return float(r.json().get("price", 0))
-        except:
-            return 0
+        def _sync():
+            try:
+                r = requests.get("https://api.binance.com/api/v3/ticker/price",
+                                 params={"symbol": pair}, timeout=5)
+                return float(r.json().get("price", 0))
+            except:
+                return 0
+        return await asyncio.to_thread(_sync)
 
     # ==================================================================
     # GATE FILTER — the key difference from V1

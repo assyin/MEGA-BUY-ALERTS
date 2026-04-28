@@ -48,19 +48,15 @@ def _fetch_4h_candle(pair: str) -> Optional[Tuple[float, float, float, float]]:
         return None
 
 
-def _fetch_1h_trend(pair: str) -> Optional[str]:
-    """Returns 'BULLISH' or 'BEARISH' from current 1H candle."""
+def _fetch_1h_trend(pair: str) -> Optional[Dict]:
+    """Returns a dict from the multi-factor trend engine:
+       {bullish: bool, label: str, score: int, reason: str}.
+       Backward-compat: callers that read a string get the label."""
     try:
-        r = requests.get(
-            "https://api.binance.com/api/v3/klines",
-            params={"symbol": pair, "interval": "1h", "limit": 1},
-            timeout=5,
-        )
-        kd = r.json()
-        if not kd or not isinstance(kd, list) or len(kd) == 0:
-            return None
-        o, c = float(kd[0][1]), float(kd[0][4])
-        return "BULLISH" if c >= o else "BEARISH"
+        from openclaw.pipeline.trend_engine import compute_trend, is_bullish
+        bullish, reason = is_bullish(pair)
+        t = compute_trend(pair)
+        return {"bullish": bullish, "label": t["label"], "score": t["score"], "reason": reason}
     except Exception:
         return None
 
@@ -157,14 +153,15 @@ def passes_optimized_gate(pair: str, alert: Dict, label: str = "GATE", cache: Di
     if range_pct < MIN_RANGE_4H_PCT:
         return False, f"range={range_pct:.2f}% < {MIN_RANGE_4H_PCT}%"
 
-    # 5. BTC + ETH trend 1H (both must be BULLISH) — use cache if available
-    btc_trend = cache["btc_trend"] if cache else _fetch_1h_trend("BTCUSDT")
-    if btc_trend != "BULLISH":
-        return False, f"btc_1h={btc_trend}"
+    # 5. BTC + ETH regime (multi-factor trend engine, not a raw 1h candle)
+    #    Accept score >= 0 (BULLISH / BULLISH_OK / NEUTRAL). Only reject hard-bearish.
+    btc_t = cache["btc_trend"] if cache else _fetch_1h_trend("BTCUSDT")
+    if not btc_t or not btc_t.get("bullish"):
+        return False, f"btc_1h={btc_t.get('label') if btc_t else 'n/a'} ({btc_t.get('reason') if btc_t else ''})"
 
-    eth_trend = cache["eth_trend"] if cache else _fetch_1h_trend("ETHUSDT")
-    if eth_trend != "BULLISH":
-        return False, f"eth_1h={eth_trend}"
+    eth_t = cache["eth_trend"] if cache else _fetch_1h_trend("ETHUSDT")
+    if not eth_t or not eth_t.get("bullish"):
+        return False, f"eth_1h={eth_t.get('label') if eth_t else 'n/a'} ({eth_t.get('reason') if eth_t else ''})"
 
     # 6. 24h change of pair — use cache if available
     ch24 = cache["change_24h"] if cache else _fetch_24h_change(pair)

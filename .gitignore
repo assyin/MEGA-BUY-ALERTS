@@ -37,3 +37,54 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# Next.js build outputs
+.next/
+mega-buy-ai/dashboard/.next/
+mega-buy-ai/dashboard/out/
+mega-buy-ai/dashboard/tsconfig.tsbuildinfo
+
+# .env backups (rotated by services — contain secrets)
+.env.backup-*
+python/.env.backup-*
+
+# Local backups (full_* tarballs may contain secrets — never commit)
+backups/full_*/
+backups/*.json
+backups/*.tar.gz
+backups/*.db
+backups/*.dump
+backups/*.sql.gz
+
+# OpenClaw runtime artifacts (charts, reports, token_usage — large + regenerable)
+mega-buy-ai/openclaw/data/charts/
+mega-buy-ai/openclaw/data/reports/
+mega-buy-ai/openclaw/data/token_usage*.json
+mega-buy-ai/openclaw/memory/*.db
+mega-buy-ai/openclaw/memory/*.sqlite
+mega-buy-ai/openclaw/memory/*.jsonl
+
+# Local SQLite DBs (snapshotted via backup procedure, not git)
+mega-buy-ai/backtest/data/*.db
+mega-buy-ai/data/simulation.db
+mega-buy-ai/data/charts-winners/
+
+# Misc
+.claude/
+mega-buy-ai/dashboard-vercel/
+
+# Loose screenshot/chart images at repo root (use docs/ instead)
+/*.jpg
+/*.png
+/*.jpeg
+
+# SQLite journal/wal/shm sidecars
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Doubled-nested folder (created in error)
+/MEGA-BUY-BOT/
+
+# Allow the backup index even though backups/ is otherwise excluded
+!backups/BACKUP_REFERENCE.md

@@ -86,11 +86,13 @@ class PortfolioManagerV9:
             return []
 
     async def _get_price(self, pair: str) -> float:
-        try:
-            return float(requests.get("https://api.binance.com/api/v3/ticker/price",
-                params={"symbol": pair}, timeout=5).json().get("price", 0))
-        except:
-            return 0
+        def _sync():
+            try:
+                return float(requests.get("https://api.binance.com/api/v3/ticker/price",
+                    params={"symbol": pair}, timeout=5).json().get("price", 0))
+            except:
+                return 0
+        return await asyncio.to_thread(_sync)
 
     async def _tg(self, text: str):
         """Send a Telegram notification (silent fail)."""
@@ -122,10 +124,14 @@ class PortfolioManagerV9:
 
         # Check vol24h for bypass
         vol_bypass = False
+        def _fetch_vol_klines():
+            try:
+                return requests.get("https://api.binance.com/api/v3/klines",
+                    params={"symbol": pair, "interval": "1h", "limit": 48}, timeout=5).json()
+            except:
+                return None
         try:
-            _rv = requests.get("https://api.binance.com/api/v3/klines",
-                params={"symbol": pair, "interval": "1h", "limit": 48}, timeout=5)
-            _kv = _rv.json()
+            _kv = await asyncio.to_thread(_fetch_vol_klines)
             if _kv and isinstance(_kv, list) and len(_kv) >= 2:
                 vols = [float(k[7]) for k in _kv]
                 cur = vols[-1]
@@ -167,10 +173,20 @@ class PortfolioManagerV9:
             print(f"💼 V9 REJECT {pair}: ADX={adx:.0f} not in [{self.MIN_ADX},{adx_max})")
             return None
 
+        def _fetch_btc():
+            try:
+                return requests.get("https://api.binance.com/api/v3/klines",
+                    params={"symbol": "BTCUSDT", "interval": "1h", "limit": 1}, timeout=5).json()
+            except:
+                return None
+        def _fetch_24h():
+            try:
+                return requests.get("https://api.binance.com/api/v3/ticker/24hr",
+                    params={"symbol": pair}, timeout=5).json()
+            except:
+                return None
         try:
-            _rk = requests.get("https://api.binance.com/api/v3/klines",
-                params={"symbol": "BTCUSDT", "interval": "1h", "limit": 1}, timeout=5)
-            _kd = _rk.json()
+            _kd = await asyncio.to_thread(_fetch_btc)
             if _kd and isinstance(_kd, list) and len(_kd) > 0:
                 btc_o, btc_c = float(_kd[0][1]), float(_kd[0][4])
                 if btc_c < btc_o:
@@ -180,12 +196,12 @@ class PortfolioManagerV9:
             pass
 
         try:
-            _r24 = requests.get("https://api.binance.com/api/v3/ticker/24hr",
-                params={"symbol": pair}, timeout=5)
-            ch24 = float(_r24.json().get("priceChangePercent", 0))
-            if ch24 < 1.0:
-                print(f"💼 V9 REJECT {pair}: 24h={ch24:.1f}% < 1%")
-                return None
+            _r24j = await asyncio.to_thread(_fetch_24h)
+            if _r24j:
+                ch24 = float(_r24j.get("priceChangePercent", 0))
+                if ch24 < 1.0:
+                    print(f"💼 V9 REJECT {pair}: 24h={ch24:.1f}% < 1%")
+                    return None
         except:
             pass
 

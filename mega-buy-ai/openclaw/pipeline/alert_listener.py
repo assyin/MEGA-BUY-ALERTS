@@ -80,8 +80,8 @@ class AlertListener:
     async def _check_new_alerts(self):
         """Fetch recent alerts, dispatch new ones."""
         try:
-            # Get alerts from last 30 minutes
-            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+            # Get alerts from last 60 minutes
+            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=60)).isoformat()
             result = self.sb.table("alerts") \
                 .select("*, decisions(*)") \
                 .gte("alert_timestamp", cutoff) \

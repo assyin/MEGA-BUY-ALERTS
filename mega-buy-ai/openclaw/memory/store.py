@@ -19,6 +19,7 @@ class MemoryStore:
         """Check tables exist. If not, use local JSON fallback."""
         self._memory_ok = False
         self._state_ok = False
+        self._local_patterns = []
         try:
             self.sb.table("agent_memory").select("id").limit(1).execute()
             self._memory_ok = True

@@ -31,7 +31,7 @@ SERVICES = {
         "name": "Dashboard",
         "port": 9000,
         "health_url": None,  # Just check port
-        "start_cmd": f"cd {MEGA_BUY_AI / 'dashboard'} && npx next dev --port 9000",
+        "start_cmd": f"cd {MEGA_BUY_AI / 'dashboard'} && npx next start --port 9000",
         "log": "/tmp/dashboard.log",
     },
     "backtest_api": {

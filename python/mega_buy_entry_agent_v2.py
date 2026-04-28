@@ -49,6 +49,8 @@ except ImportError:
 # ═══════════════════════════════════════════════════════
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "YOUR_TOKEN_HERE")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID")
+# Comma-separated list of destinations (DM id, group id, channel id…). Empty entries are ignored.
+TELEGRAM_CHAT_IDS = [c.strip() for c in TELEGRAM_CHAT_ID.split(",") if c.strip()]
 
 GOOGLE_SHEETS_ENABLED = True
 GOOGLE_SHEET_NAME = "MEGA BUY Alerts"
@@ -786,14 +788,15 @@ def ib(v):
 # 📱 TELEGRAM NOTIFICATIONS
 # ═══════════════════════════════════════════════════════
 def send_telegram(text):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, json={
-            "chat_id": TELEGRAM_CHAT_ID, "text": text,
-            "parse_mode": "HTML", "disable_web_page_preview": True
-        }, timeout=10)
-    except Exception as e:
-        print(f"  ⚠️ Telegram: {e}")
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    for cid in TELEGRAM_CHAT_IDS:
+        try:
+            requests.post(url, json={
+                "chat_id": cid, "text": text,
+                "parse_mode": "HTML", "disable_web_page_preview": True
+            }, timeout=10)
+        except Exception as e:
+            print(f"  ⚠️ Telegram for {cid}: {e}")
 
 
 def send_entry_notification(box, conds):

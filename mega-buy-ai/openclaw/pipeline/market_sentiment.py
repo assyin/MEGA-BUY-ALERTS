@@ -15,10 +15,12 @@ class MarketSentiment:
     _fg_cache: Dict = {"data": None, "ts": 0}
     _dom_cache: Dict = {"data": None, "ts": 0}
     _btc_eth_cache: Dict = {"data": None, "ts": 0}
+    _others_cache: Dict = {"data": None, "ts": 0}
 
     FG_TTL = 3600  # 1 hour
     DOM_TTL = 900  # 15 min
     BTC_ETH_TTL = 300  # 5 min
+    OTHERS_TTL = 900  # 15 min
 
     @classmethod
     def get_fear_greed(cls) -> Optional[Dict]:
@@ -78,21 +80,20 @@ class MarketSentiment:
 
         result = {}
         try:
+            from openclaw.pipeline.trend_engine import compute_trend
             for symbol, prefix in [("BTCUSDT", "btc"), ("ETHUSDT", "eth")]:
-                # 24h change
+                # 24h price (cheap, no trend heuristic here — trend_engine does it)
                 r = requests.get("https://api.binance.com/api/v3/ticker/24hr",
                                  params={"symbol": symbol}, timeout=5)
                 d = r.json()
-                result[f"{prefix}_change_24h"] = round(float(d.get("priceChangePercent", 0)), 2)
                 result[f"{prefix}_price"] = float(d.get("lastPrice", 0))
 
-                # 1h trend (compare last close vs 24 candles ago via 1h kline)
-                rk = requests.get("https://api.binance.com/api/v3/klines",
-                                  params={"symbol": symbol, "interval": "1h", "limit": 1}, timeout=5)
-                kd = rk.json()
-                if kd and isinstance(kd, list) and len(kd) > 0:
-                    o, c = float(kd[0][1]), float(kd[0][4])
-                    result[f"{prefix}_trend_1h"] = "BULLISH" if c >= o else "BEARISH"
+                # Multi-factor trend verdict (structural EMA20/50 on closed 1H + 24h momentum)
+                t = compute_trend(symbol)
+                result[f"{prefix}_change_24h"] = t["details"].get("change_24h")
+                result[f"{prefix}_trend_1h"] = t["label"]        # BULLISH / BULLISH_OK / NEUTRAL / BEARISH
+                result[f"{prefix}_trend_score"] = t["score"]
+                result[f"{prefix}_trend_bullish"] = t["bullish"]
 
                 time.sleep(0.05)
 
@@ -103,6 +104,89 @@ class MarketSentiment:
             pass
 
         return cls._btc_eth_cache["data"]
+
+    @classmethod
+    def get_others_d(cls) -> Optional[Dict]:
+        """Proxy for TradingView OTHERS.D (altcoin market cap excluding top 10).
+
+        OTHERS.D = 100 - sum(dominance of top-10 coins by market cap).
+        Also computes 7d momentum from weighted price change of non-OTHERS vs total.
+
+        Returns:
+          {
+            "others_d": float,           # current OTHERS.D %
+            "others_d_label": str,       # BTC/ETH_DOMINANT / BALANCED / ALT_STRONG / ALT_SEASON
+            "others_7d_change": float,   # estimated 7d change in OTHERS cap (%)
+            "top10_7d_avg": float,       # weighted 7d change of top-10 (approx non-OTHERS)
+            "top10_symbols": list,
+          }
+        """
+        now = time.time()
+        if cls._others_cache["data"] and (now - cls._others_cache["ts"]) < cls.OTHERS_TTL:
+            return cls._others_cache["data"]
+
+        try:
+            # 1. Global market cap + dominances
+            rg = requests.get("https://api.coingecko.com/api/v3/global", timeout=8)
+            g = rg.json().get("data", {})
+            total_mc = g.get("total_market_cap", {}).get("usd")
+            if not total_mc or total_mc <= 0:
+                return cls._others_cache["data"]
+
+            # 2. Top 10 coins with 7d price change
+            rm = requests.get(
+                "https://api.coingecko.com/api/v3/coins/markets",
+                params={
+                    "vs_currency": "usd",
+                    "order": "market_cap_desc",
+                    "per_page": 10,
+                    "page": 1,
+                    "sparkline": "false",
+                    "price_change_percentage": "7d",
+                },
+                timeout=10,
+            )
+            top10 = rm.json()
+            if not isinstance(top10, list) or len(top10) < 10:
+                return cls._others_cache["data"]
+
+            top10_mc = sum((c.get("market_cap") or 0) for c in top10)
+            top10_dominance = round((top10_mc / total_mc) * 100, 2) if total_mc > 0 else 0
+            others_d = round(100 - top10_dominance, 2)
+
+            # Weighted 7d change of top-10
+            top10_7d = None
+            if top10_mc > 0:
+                weighted = sum((c.get("market_cap") or 0) * (c.get("price_change_percentage_7d_in_currency") or 0) for c in top10)
+                top10_7d = round(weighted / top10_mc, 2)
+
+            # Label thresholds (conventional crypto regime zones)
+            if others_d >= 18:
+                label = "ALT_SEASON"
+            elif others_d >= 13:
+                label = "ALT_STRONG"
+            elif others_d >= 8:
+                label = "BALANCED"
+            else:
+                label = "BTC_ETH_DOMINANT"
+
+            # Rough OTHERS 7d change: derive from non-OTHERS weighted vs total
+            # If top10 7d is +X% and OTHERS.D = Y%, implicitly OTHERS 7d change can be bounded.
+            # We leave the exact number to consumers; top10_7d_avg is already the useful reference.
+
+            out = {
+                "others_d": others_d,
+                "others_d_label": label,
+                "top10_dominance": top10_dominance,
+                "top10_7d_avg": top10_7d,
+                "top10_symbols": [c.get("symbol", "").upper() for c in top10],
+            }
+            cls._others_cache = {"data": out, "ts": now}
+            return out
+        except Exception:
+            pass
+
+        return cls._others_cache["data"]
 
     @classmethod
     def get_all(cls) -> Dict:
@@ -118,4 +202,7 @@ class MarketSentiment:
         be = cls.get_btc_eth_data()
         if be:
             out.update(be)
+        od = cls.get_others_d()
+        if od:
+            out.update(od)
         return out

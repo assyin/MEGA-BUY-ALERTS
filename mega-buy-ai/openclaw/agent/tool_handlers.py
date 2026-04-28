@@ -577,6 +577,136 @@ async def handle_record_outcome(alert_id: str, result: str, pnl_pct: float = 0,
 
 
 # ============================================================
+# Conversational query helpers — read-only Supabase queries for free-text Q&A
+# ============================================================
+
+def _portfolio_versions(version: str):
+    """Return list of (version_label, table_suffix) tuples to query."""
+    if version == "all":
+        return [(v, "" if v == "v1" else f"_{v}") for v in
+                ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9"]]
+    if version in {"v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9"}:
+        return [(version, "" if version == "v1" else f"_{version}")]
+    return [("v1", "")]
+
+
+async def handle_get_recent_trades(days: int = 7, version: str = "all",
+                                    status: str = "all", limit: int = 20, **kwargs) -> Dict:
+    """Recent trades from openclaw_positions tables, optionally filtered by version/status."""
+    from datetime import datetime, timezone, timedelta
+    settings = get_settings()
+    from supabase import create_client
+    sb = create_client(settings.supabase_url, settings.supabase_service_key)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    rows: list = []
+    for ver, suffix in _portfolio_versions(version):
+        table = f"openclaw_positions{suffix}"
+        try:
+            q = sb.table(table).select("*").gte("opened_at", cutoff).order("opened_at", desc=True).limit(limit)
+            if status.upper() in {"OPEN", "CLOSED"}:
+                q = q.eq("status", status.upper())
+            r = q.execute()
+            for row in (r.data or []):
+                rows.append({**row, "_version": ver})
+        except Exception as e:
+            rows.append({"_error": f"{table}: {type(e).__name__}: {str(e)[:80]}"})
+
+    rows.sort(key=lambda r: r.get("opened_at") or "", reverse=True)
+    rows = [r for r in rows if "_error" not in r][:limit]
+
+    return {
+        "count": len(rows),
+        "days": days,
+        "version_filter": version,
+        "status_filter": status,
+        "trades": [{
+            "version": r.get("_version"),
+            "pair": r.get("pair"),
+            "status": r.get("status"),
+            "decision": r.get("decision"),
+            "confidence": r.get("confidence"),
+            "scanner_score": r.get("scanner_score"),
+            "entry_price": r.get("entry_price"),
+            "current_price": r.get("current_price"),
+            "exit_price": r.get("exit_price"),
+            "pnl_pct": r.get("pnl_pct"),
+            "pnl_usd": r.get("pnl_usd"),
+            "size_usd": r.get("size_usd"),
+            "sl_price": r.get("sl_price"),
+            "tp_price": r.get("tp_price"),
+            "close_reason": r.get("close_reason"),
+            "opened_at": r.get("opened_at"),
+            "closed_at": r.get("closed_at"),
+        } for r in rows],
+    }
+
+
+async def handle_get_top_trades(metric: str = "pnl_pct", days: int = 7,
+                                 version: str = "all", direction: str = "best",
+                                 limit: int = 5, **kwargs) -> Dict:
+    """Top winners or losers across portfolios. metric ∈ {pnl_pct, pnl_usd}, direction ∈ {best, worst}."""
+    full = await handle_get_recent_trades(days=days, version=version, status="all", limit=500)
+    trades = full.get("trades", [])
+    metric_key = metric if metric in {"pnl_pct", "pnl_usd"} else "pnl_pct"
+    valid = [t for t in trades if t.get(metric_key) is not None]
+    reverse = (direction == "best")
+    valid.sort(key=lambda t: t.get(metric_key) or 0, reverse=reverse)
+    return {
+        "count": len(valid[:limit]),
+        "metric": metric_key,
+        "direction": direction,
+        "days": days,
+        "version_filter": version,
+        "trades": valid[:limit],
+    }
+
+
+async def handle_get_recent_alerts(days: int = 7, decision: str = "all",
+                                    outcome: str = "all", pair: str = "",
+                                    sort_by: str = "timestamp", direction: str = "desc",
+                                    limit: int = 20, **kwargs) -> Dict:
+    """Recent OpenClaw decisions from agent_memory (the tracker view).
+    sort_by ∈ {timestamp, pnl_max, pnl_min, pnl_at_close, pnl_pct, scanner_score, agent_confidence}.
+    direction ∈ {desc, asc}. Default: most recent first."""
+    from datetime import datetime, timezone, timedelta
+    settings = get_settings()
+    from supabase import create_client
+    sb = create_client(settings.supabase_url, settings.supabase_service_key)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    sortable = {"timestamp", "pnl_max", "pnl_min", "pnl_at_close", "pnl_pct", "scanner_score", "agent_confidence"}
+    sort_col = sort_by if sort_by in sortable else "timestamp"
+    desc = (direction.lower() != "asc")
+
+    q = sb.table("agent_memory").select(
+        "id, pair, agent_decision, agent_confidence, outcome, pnl_pct, pnl_max, pnl_min, "
+        "pnl_at_close, scanner_score, timestamp, alert_id"
+    ).gte("timestamp", cutoff).order(sort_col, desc=desc).limit(limit)
+    if decision.upper() not in {"ALL", ""}:
+        q = q.eq("agent_decision", decision.upper())
+    if outcome.upper() not in {"ALL", ""}:
+        q = q.eq("outcome", outcome.upper())
+    if pair:
+        q = q.eq("pair", pair.upper())
+
+    try:
+        r = q.execute()
+        return {
+            "count": len(r.data or []),
+            "days": days,
+            "decision_filter": decision,
+            "outcome_filter": outcome,
+            "pair_filter": pair or "all",
+            "sort_by": sort_col,
+            "direction": "desc" if desc else "asc",
+            "alerts": r.data or [],
+        }
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+
+
+# ============================================================
 # Handler registry
 # ============================================================
 TOOL_HANDLERS = {
@@ -587,6 +717,9 @@ TOOL_HANDLERS = {
     "get_market_context": handle_get_market_context,
     "get_similar_patterns": handle_get_similar_patterns,
     "get_portfolio_status": handle_get_portfolio_status,
+    "get_recent_trades": handle_get_recent_trades,
+    "get_top_trades": handle_get_top_trades,
+    "get_recent_alerts": handle_get_recent_alerts,
     "send_recommendation": handle_send_recommendation,
     "record_decision": handle_record_decision,
     "record_outcome": handle_record_outcome,

@@ -26,6 +26,8 @@ class OpenClawBot:
         self.memory = memory
         self.app: Optional[Application] = None
         self.chat_id = self.settings.telegram_chat_id
+        # Comma-separated list of destinations (DM id, group id, channel id…)
+        self.chat_ids = [c.strip() for c in str(self.chat_id).split(",") if c.strip()]
 
     async def start(self):
         """Start the Telegram bot in polling mode."""
@@ -51,10 +53,23 @@ class OpenClawBot:
         set_telegram_sender(self._send_recommendation)
 
         # Start polling
-        await self.app.initialize()
-        await self.app.start()
-        await self.app.updater.start_polling(drop_pending_updates=True)
-        print(f"🤖 Telegram bot started (chat_id: {self.chat_id})")
+        # Init in background — don't block openclaw startup if Telegram is unreachable
+        async def _init_with_retry():
+            retry = 0
+            while True:
+                try:
+                    await self.app.initialize()
+                    await self.app.start()
+                    await self.app.updater.start_polling(drop_pending_updates=True)
+                    print(f"🤖 Telegram bot started (chat_id: {self.chat_id})")
+                    return
+                except Exception as e:
+                    retry += 1
+                    wait = min(120, 10 * retry)
+                    print(f"⚠️ Telegram bot init failed (attempt {retry}): {type(e).__name__}. Retry in {wait}s.")
+                    await asyncio.sleep(wait)
+        asyncio.create_task(_init_with_retry())
+        print(f"🤖 Telegram bot init scheduled in background (chat_id: {self.chat_id})")
 
     async def stop(self):
         """Stop the bot."""
@@ -66,44 +81,55 @@ class OpenClawBot:
     # === SEND METHODS ===
 
     async def send_alert_notification(self, alert: dict):
-        """Send initial alert notification (before analysis)."""
+        """Send initial alert notification (before analysis) to every configured chat_id."""
         text = format_alert_notification(alert)
-        await self.app.bot.send_message(
-            chat_id=self.chat_id, text=text, parse_mode="Markdown"
-        )
+        for cid in self.chat_ids:
+            try:
+                await self.app.bot.send_message(
+                    chat_id=cid, text=text, parse_mode="Markdown"
+                )
+            except Exception as e:
+                print(f"⚠️ Telegram alert to {cid} failed: {type(e).__name__}: {e}")
 
     async def _send_recommendation(self, message: str, decision: str = "WATCH", alert_id: str = ""):
-        """Send recommendation with inline buttons (called by tool_handlers)."""
-        buttons = []
-        if decision == "BUY":
-            buttons = [
-                [InlineKeyboardButton("✅ Confirm Trade", callback_data=f"confirm:{alert_id}"),
-                 InlineKeyboardButton("👀 Watch", callback_data=f"watch:{alert_id}")],
-                [InlineKeyboardButton("❌ Skip", callback_data=f"skip:{alert_id}"),
-                 InlineKeyboardButton("📊 Details", callback_data=f"details:{alert_id}")],
-            ]
-        elif decision == "WATCH":
-            buttons = [
-                [InlineKeyboardButton("👀 Watching", callback_data=f"watch:{alert_id}"),
-                 InlineKeyboardButton("❌ Skip", callback_data=f"skip:{alert_id}")],
-            ]
-        else:
-            buttons = [
-                [InlineKeyboardButton("✅ OK", callback_data=f"skip:{alert_id}")],
-            ]
+        """Send recommendation to every configured chat_id. Strips inline buttons for channels/supergroups."""
+        def _build_markup():
+            buttons = []
+            if decision == "BUY":
+                buttons = [
+                    [InlineKeyboardButton("✅ Confirm Trade", callback_data=f"confirm:{alert_id}"),
+                     InlineKeyboardButton("👀 Watch", callback_data=f"watch:{alert_id}")],
+                    [InlineKeyboardButton("❌ Skip", callback_data=f"skip:{alert_id}"),
+                     InlineKeyboardButton("📊 Details", callback_data=f"details:{alert_id}")],
+                ]
+            elif decision == "WATCH":
+                buttons = [
+                    [InlineKeyboardButton("👀 Watching", callback_data=f"watch:{alert_id}"),
+                     InlineKeyboardButton("❌ Skip", callback_data=f"skip:{alert_id}")],
+                ]
+            else:
+                buttons = [
+                    [InlineKeyboardButton("✅ OK", callback_data=f"skip:{alert_id}")],
+                ]
+            return InlineKeyboardMarkup(buttons) if buttons else None
 
-        markup = InlineKeyboardMarkup(buttons) if buttons else None
-
-        try:
-            await self.app.bot.send_message(
-                chat_id=self.chat_id, text=message,
-                parse_mode="Markdown", reply_markup=markup
-            )
-        except Exception as e:
-            # Fallback without Markdown if parsing fails
-            await self.app.bot.send_message(
-                chat_id=self.chat_id, text=message, reply_markup=markup
-            )
+        for cid in self.chat_ids:
+            # Channels / supergroups (id starts with -100) don't support inline buttons
+            is_channel = str(cid).startswith('-100')
+            markup = None if is_channel else _build_markup()
+            try:
+                await self.app.bot.send_message(
+                    chat_id=cid, text=message,
+                    parse_mode="Markdown", reply_markup=markup
+                )
+            except Exception as e:
+                # Fallback without Markdown if parsing fails
+                try:
+                    await self.app.bot.send_message(
+                        chat_id=cid, text=message, reply_markup=markup
+                    )
+                except Exception as e2:
+                    print(f"⚠️ Telegram rec to {cid} failed: {type(e2).__name__}: {e2}")
 
     # === COMMAND HANDLERS ===
 
@@ -246,6 +272,9 @@ class OpenClawBot:
     # === FREE TEXT (conversational) ===
 
     async def _free_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # Ignore channel posts / edits / non-text messages — only respond to direct user messages
+        if update.message is None or update.message.text is None:
+            return
         question = update.message.text
         await update.message.reply_text("🤔 Reflexion en cours...")
 
