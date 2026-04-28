@@ -40,6 +40,29 @@ def get_btc_dominance() -> Optional[float]:
     return None
 
 
+# ─── Shared cache for BTC 24h change (refreshed every 60s, Binance ticker) ───
+_BTC_24H_CACHE = {"value": None, "ts": 0}
+_BTC_24H_TTL = 60  # 1 minute — frequent enough to catch dumps
+
+
+def get_btc_change_24h() -> Optional[float]:
+    """BTC 24h price change % from Binance, cached 60s."""
+    now = time.time()
+    if _BTC_24H_CACHE["value"] is not None and now - _BTC_24H_CACHE["ts"] < _BTC_24H_TTL:
+        return _BTC_24H_CACHE["value"]
+    try:
+        r = requests.get("https://api.binance.com/api/v3/ticker/24hr",
+                         params={"symbol": "BTCUSDT"}, timeout=5)
+        ch = r.json().get("priceChangePercent")
+        if ch is not None:
+            _BTC_24H_CACHE["value"] = float(ch)
+            _BTC_24H_CACHE["ts"] = now
+            return float(ch)
+    except Exception:
+        pass
+    return None
+
+
 def _candle_stats(klines: list) -> Dict:
     """From a list of klines, return body/range/direction of the LAST candle."""
     if not klines: return {}

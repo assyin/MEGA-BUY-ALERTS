@@ -68,7 +68,7 @@ function collapseAll(){document.querySelectorAll('.trade').forEach(d=>d.open=fal
 </script>
 </head><body>
 <h1>🔬 V11B Compression — Trade Audit</h1>
-<div class='subtitle'>Généré : 2026-04-28 10:03 UTC • Filtre : <code>Range 30m ≤ 1.89%</code> ET <code>Range 4h ≤ 2.58%</code> • Exit hybride V7 (TP1+TP2+Trail+SL) • Capital $5,000 (8%/trade)</div>
+<div class='subtitle'>Généré : 2026-04-28 14:08 UTC • Filtre : <code>Range 30m ≤ 1.89%</code> ET <code>Range 4h ≤ 2.58%</code> • Exit hybride V7 (TP1+TP2+Trail+SL) • Capital $5,000 (8%/trade)</div>
 <div class='summary-grid'>
 <div class='summary-card'><div class='label'>Trades fermés</div><div class='value'>199</div></div>
 <div class='summary-card'><div class='label'>Win Rate</div><div class='value win'>85.9%</div><div class='label'>171W / 28L</div></div>
@@ -83,6 +83,50 @@ function collapseAll(){document.querySelectorAll('.trade').forEach(d=>d.open=fal
 <tr><td><code>TRAIL_STOP</code></td><td>48</td><td>24.1%</td></tr>
 <tr><td><code>SL_HIT</code></td><td>20</td><td>10.1%</td></tr>
 <tr><td><code>BREAKEVEN_STOP</code></td><td>15</td><td>7.5%</td></tr>
+</table>
+<h2>📊 Risk-adjusted metrics</h2>
+<table>
+<tr><th>Metric</th><th style='text-align:right'>Value</th><th>Interpretation</th></tr>
+<tr><td><b>Sharpe annualisé</b></td><td style='text-align:right'><b>53.55</b></td><td>per-trade Sharpe × √(trades/an)</td></tr>
+<tr><td>Sharpe per-trade</td><td style='text-align:right'>1.010</td><td>mean(ret) / stdev(ret)</td></tr>
+<tr><td><b>Profit Factor</b></td><td style='text-align:right'><b>8.68</b></td><td>$wins / |$losses| — &gt;1 = profitable</td></tr>
+<tr><td><b>Calmar Ratio</b></td><td style='text-align:right'><b>815.52</b></td><td>annualized return / max drawdown</td></tr>
+<tr><td>Max drawdown</td><td style='text-align:right'>1.97%</td><td>peak-to-trough on equity curve</td></tr>
+<tr><td>Annualized return (linear)</td><td style='text-align:right'>+1608.3%</td><td>period return × 365/26j</td></tr>
+<tr><td>Trades/an (extrapolated)</td><td style='text-align:right'>2813</td><td>window: 26j (199 trades)</td></tr>
+<tr><td>Max losing streak</td><td style='text-align:right'>4</td><td>longest consecutive losses</td></tr>
+<tr><td>Max winning streak</td><td style='text-align:right'>59</td><td>longest consecutive wins</td></tr>
+<tr><td>Sum wins / losses</td><td style='text-align:right'>+$6,430.14 / $-740.44</td><td></td></tr>
+</table>
+<div style='margin:14px 0;padding:12px 16px;background:#3a2d0a;border-left:4px solid #fbbf24;border-radius:4px;color:#fde68a;font-size:13px'>
+⚠️ Sharpe annualisé théorique. Ne pas comparer aux Sharpe traditionnels (S&P 500, hedge funds). En live, un Sharpe de 2-4 serait déjà excellent. Voir Profit Factor et Calmar pour des métriques plus interprétables.
+</div>
+<h3 style='color:#7dd3fc;font-size:14px;margin-top:18px'>Streak distribution</h3>
+<table>
+<tr><th>Length</th><th style='text-align:right'>Wins (count)</th><th style='text-align:right'>Losses (count)</th></tr>
+<tr><td>1</td><td style='text-align:right'>4</td><td style='text-align:right'>15</td></tr>
+<tr><td>2</td><td style='text-align:right'>2</td><td style='text-align:right'>3</td></tr>
+<tr><td>3</td><td style='text-align:right'>3</td><td style='text-align:right'>1</td></tr>
+<tr><td>4</td><td style='text-align:right'>2</td><td style='text-align:right'>1</td></tr>
+<tr><td>5</td><td style='text-align:right'>2</td><td style='text-align:right'>—</td></tr>
+<tr><td>7</td><td style='text-align:right'>2</td><td style='text-align:right'>—</td></tr>
+<tr><td>19</td><td style='text-align:right'>1</td><td style='text-align:right'>—</td></tr>
+<tr><td>21</td><td style='text-align:right'>1</td><td style='text-align:right'>—</td></tr>
+<tr><td>23</td><td style='text-align:right'>1</td><td style='text-align:right'>—</td></tr>
+<tr><td>59</td><td style='text-align:right'>1</td><td style='text-align:right'>—</td></tr>
+</table>
+<h2>🧪 Paper-trading slippage tracker (Reco #5 Phase 1)</h2>
+<p style='color:#94a3b8;font-size:13px'>Capture du prix Binance ~60s après l'alerte = exécution réaliste. <code>slip &gt; 0</code> = prix monté (fill défavorable). <code>slip &lt; 0</code> = prix redescendu (fill favorable).</p>
+<p style='color:#fcd34d'><i>Pas encore de données paper. Appliquer <code>sql/v11_paper_tracker.sql</code> puis attendre quelques nouveaux trades.</i></p>
+<h2>🧊 BTC dump protection — historical impact</h2>
+<p style='color:#94a3b8;font-size:13px'>Distribution des trades par bucket <code>btc_change_24h</code> (au moment de l'alerte) + PnL réel. Donne une estimation du nombre de trades qui auraient été skippés par la protection layered (-5% hard / -3% soft avec ≥6 open).</p>
+<table>
+<tr><th>Bucket BTC 24h</th><th style='text-align:right'>Trades</th><th style='text-align:right'>WR</th><th style='text-align:right'>PnL réel</th><th style='text-align:right'>PnL/trade</th><th>Action future</th></tr>
+<tr><td>>= 0%</td><td style='text-align:right'>90</td><td style='text-align:right'>85.6%</td><td style='text-align:right'>$+2,995.46</td><td style='text-align:right'>$+33.28</td><td>✅ OK</td></tr>
+<tr><td>[-3%, 0%)</td><td style='text-align:right'>56</td><td style='text-align:right'>85.7%</td><td style='text-align:right'>$+1,234.67</td><td style='text-align:right'>$+22.05</td><td>✅ OK</td></tr>
+<tr><td>[-5%, -3%)</td><td style='text-align:right'>12</td><td style='text-align:right'>100.0%</td><td style='text-align:right'>$+347.40</td><td style='text-align:right'>$+28.95</td><td>⚠️ SOFT CAP si ≥6 open</td></tr>
+<tr><td>&lt;= -5%</td><td style='text-align:right'>0</td><td style='text-align:right'>0.0%</td><td style='text-align:right'>$+0.00</td><td style='text-align:right'>$+0.00</td><td>🛑 HARD STOP — toujours skippé</td></tr>
+<tr><td><i>no btc_change_24h</i></td><td style='text-align:right'>41</td><td colspan='4'>(FP missing field)</td></tr>
 </table>
 <div class='top-list'>
 <div class='top-list-card'><h3 class='win-h3'>🏆 Top 5 Winners</h3><ol>
@@ -6483,20 +6527,20 @@ function collapseAll(){document.querySelectorAll('.trade').forEach(d=>d.open=fal
 <h3 style='color:#7dd3fc;font-size:14px;margin-top:12px'>📥 Entry</h3>
 <div class="section-title">Conditions du filtre V11B (gate)</div>
 <ul class="conditions">
-<li>✅ <code>range_30m = 0.61%</code> ≤ 1.89%</li>
-<li>✅ <code>range_4h = 2.22%</code> ≤ 2.58%</li>
+<li>✅ <code>range_30m = 2.98%</code> ≤ 1.89%</li>
+<li>✅ <code>range_4h = 2.98%</code> ≤ 2.58%</li>
 <li class="ok">✅ Les 2 conditions du gate V11B passent → entrée autorisée.</li>
 </ul>
 <div class="section-title">Contexte au moment de l'alerte</div>
 <ul class="context">
 <li>Scanner score : <b>9/10</b></li>
 <li>Décision OpenClaw : <b>BUY STRONG</b> (75% confiance)</li>
-<li>Bougie 4H : direction <b>red</b>, body 1.98%</li>
+<li>Bougie 4H : direction <b>red</b>, body 2.13%</li>
 <li>RSI : 67.4</li>
 <li>ADX 4H : 24.6 (DI+ 37 / DI- 12)</li>
-<li>Change 24h : -1.00%</li>
+<li>Change 24h : +11.45%</li>
 <li>BTC trend 1H : <code>BULLISH</code></li>
-<li>Fear &amp; Greed : 23</li>
+<li>Fear &amp; Greed : 21</li>
 </ul>
 <h3 style='color:#7dd3fc;font-size:14px;margin-top:16px'>📤 Exit</h3>
 <div class="section-title">Trajectoire</div>

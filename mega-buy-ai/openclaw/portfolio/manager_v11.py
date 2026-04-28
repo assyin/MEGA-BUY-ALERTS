@@ -12,7 +12,22 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from openclaw.config import get_settings
-from openclaw.portfolio.gates_v11 import GATES
+from openclaw.portfolio.gates_v11 import GATES, get_btc_change_24h
+
+
+# BTC dump Telegram dedup: don't spam — 60s between same (variant, trigger) messages.
+# Per-event console logging is unaffected; this only gates Telegram sends.
+_BTC_TG_LAST_SENT: Dict[str, float] = {}
+_BTC_TG_DEDUP_S = 60.0
+
+
+def _should_send_btc_tg(variant: str, trigger: str) -> bool:
+    key = f"{variant}:{trigger}"
+    now = time.time()
+    if now - _BTC_TG_LAST_SENT.get(key, 0) >= _BTC_TG_DEDUP_S:
+        _BTC_TG_LAST_SENT[key] = now
+        return True
+    return False
 
 
 class _PortfolioV11Base:
@@ -29,6 +44,15 @@ class _PortfolioV11Base:
     TP2_CLOSE_FRAC = 0.30
     TRAIL_DIST_PCT = 8.0
     TIMEOUT_H = 72
+
+    # BTC dump protection (layered) — see V11B_PRE_IMPL_CHECKS_2026-04-28.md
+    BTC_HARD_STOP_PCT = -5.0   # if BTC 24h <= this → reject all opens (any state)
+    BTC_SOFT_CAP_PCT = -3.0    # if BTC 24h <= this AND open >= threshold → reject
+    BTC_SOFT_CAP_OPEN_THRESHOLD = 6  # # of open positions that activates soft cap
+
+    # Paper trading slippage tracker (Reco #5 Phase 1) — observational only
+    PAPER_DELAY_S = 60       # seconds after alert to fetch "realistic" entry price
+    PAPER_ENABLE = True      # turn off to disable shadow logging
 
     # Subclass attrs:
     VARIANT = ""        # 'v11a' .. 'v11e'
@@ -143,6 +167,10 @@ class _PortfolioV11Base:
         if any(p.get("pair") == pair for p in open_positions):
             return None
 
+        # BTC dump protection (layered: hard stop + soft cap)
+        if not await self._btc_dump_check_ok(pair, len(open_positions)):
+            return None
+
         size_usd = round(self.INITIAL_CAPITAL * self.SIZE_PCT / 100, 2)
         if balance < size_usd:
             return None
@@ -185,6 +213,10 @@ class _PortfolioV11Base:
 
         self._update_state({"balance": round(balance - size_usd, 2)})
         print(f"💼 {self.VARIANT.upper()} OPENED: {pair} — {confidence*100:.0f}% — ${size_usd:.0f} @ {price}")
+
+        # Schedule paper-trading slippage capture (best-effort, non-blocking)
+        if self.PAPER_ENABLE:
+            asyncio.create_task(self._log_paper_entry(position["id"], pair, price))
 
         await self._tg(
             f"🆕 *{self.VARIANT.upper()} OPEN* — `{pair}`\n"
@@ -385,6 +417,65 @@ class _PortfolioV11Base:
             self._task.cancel()
         print(f"💼 {self.VARIANT.upper()} stopped")
 
+    async def _log_paper_entry(self, position_id: str, pair: str, alert_price: float):
+        """Reco #5 Phase 1 — capture realistic execution price after PAPER_DELAY_S.
+
+        Observational only: writes paper_entry_price + paper_slippage_pct on the
+        position row. Never affects exit logic. Slippage > 0 = price drifted up
+        after alert (worse fill); slippage < 0 = price came back down (better fill).
+        """
+        try:
+            await asyncio.sleep(self.PAPER_DELAY_S)
+            paper_price = await self._get_price(pair)
+            if not paper_price or not alert_price:
+                return
+            slippage_pct = (paper_price - alert_price) / alert_price * 100
+            self.sb.table(self.TABLE).update({
+                "paper_entry_price": paper_price,
+                "paper_slippage_pct": round(slippage_pct, 4),
+                "paper_logged_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", position_id).execute()
+            print(f"💼 {self.VARIANT.upper()} PAPER {pair}: alert={alert_price} paper={paper_price} slip={slippage_pct:+.3f}%")
+        except Exception as e:
+            # Best-effort: paper logging failures must never crash the bot
+            print(f"⚠️ {self.VARIANT.upper()} paper log {pair}: {e}")
+
+    async def _btc_dump_check_ok(self, pair: str, n_open: int) -> bool:
+        """Layered BTC dump protection. Returns False if open should be skipped.
+        - Hard stop: BTC 24h <= -5% → block any new entry
+        - Soft cap:  BTC 24h <= -3% AND n_open >= threshold → block to avoid concentration
+        Logs to console always; sends one Telegram per (variant, trigger) per dedup window.
+        """
+        btc_24h = await asyncio.to_thread(get_btc_change_24h)
+        if btc_24h is None:
+            return True  # fail-open if API unavailable — better miss a guard than freeze entries
+
+        # Hard stop
+        if btc_24h <= self.BTC_HARD_STOP_PCT:
+            print(f"💼 {self.VARIANT.upper()} BTC HARD STOP {pair}: btc_24h={btc_24h:+.2f}% <= {self.BTC_HARD_STOP_PCT}% (open={n_open})")
+            if _should_send_btc_tg(self.VARIANT, "hard_stop"):
+                await self._tg(
+                    f"🛑 *{self.VARIANT.upper()} BTC HARD STOP*\n"
+                    f"BTC 24h: *{btc_24h:+.2f}%* (≤ {self.BTC_HARD_STOP_PCT}%)\n"
+                    f"Open positions: *{n_open}*\n"
+                    f"All new entries blocked until BTC > {self.BTC_HARD_STOP_PCT}%"
+                )
+            return False
+
+        # Soft cap
+        if btc_24h <= self.BTC_SOFT_CAP_PCT and n_open >= self.BTC_SOFT_CAP_OPEN_THRESHOLD:
+            print(f"💼 {self.VARIANT.upper()} BTC SOFT CAP {pair}: btc_24h={btc_24h:+.2f}% <= {self.BTC_SOFT_CAP_PCT}% & open={n_open} >= {self.BTC_SOFT_CAP_OPEN_THRESHOLD}")
+            if _should_send_btc_tg(self.VARIANT, "soft_cap"):
+                await self._tg(
+                    f"⚠️ *{self.VARIANT.upper()} BTC SOFT CAP*\n"
+                    f"BTC 24h: *{btc_24h:+.2f}%* (≤ {self.BTC_SOFT_CAP_PCT}%)\n"
+                    f"Open positions: *{n_open}* (≥ {self.BTC_SOFT_CAP_OPEN_THRESHOLD})\n"
+                    f"New entries paused — concentration risk too high"
+                )
+            return False
+
+        return True
+
     def _build_gate_snapshot(self, alert: Dict, cache: Dict) -> Dict:
         """Capture the exact values that passed the gate (immutable audit trail)."""
         snap = {
@@ -426,6 +517,9 @@ class PortfolioManagerV11B(_PortfolioV11Base):
     VARIANT = "v11b"
     TABLE = "openclaw_positions_v11b"
     STATE_TABLE = "openclaw_portfolio_state_v11b"
+    # Optimum from train/test split on 199 trades: TP2=13% (train) / 14% (test) — Δ=1pt → STABLE
+    # See V11B_PRE_IMPL_CHECKS_2026-04-28.md §2. Keeps a 3pt margin above TP1=10%.
+    TP2_PCT = 13.0
 
 class PortfolioManagerV11C(_PortfolioV11Base):
     VARIANT = "v11c"

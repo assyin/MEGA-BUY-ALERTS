@@ -320,6 +320,60 @@ def main():
         H.append(f"<tr><td><code>{html.escape(r)}</code></td><td>{c}</td><td>{c/n*100:.1f}%</td></tr>")
     H.append("</table>")
 
+    # Risk-adjusted metrics (Sharpe with caveat, Profit Factor, Calmar, streaks)
+    sys.path.insert(0, str(Path(__file__).parent))
+    from _risk_metrics import compute_risk_metrics, render_html as render_risk_html, render_paper_html
+    rm = compute_risk_metrics(rows, initial_capital=5000.0)
+    H.extend(render_risk_html(rm))
+    # Paper-trading slippage (Reco #5 Phase 1) — show even if empty
+    H.extend(render_paper_html(rows))
+
+    # BTC 24h bucket distribution — estimates layered BTC dump protection impact
+    H.append("<h2>🧊 BTC dump protection — historical impact</h2>")
+    H.append("<p style='color:#94a3b8;font-size:13px'>Distribution des trades par bucket "
+             "<code>btc_change_24h</code> (au moment de l'alerte) + PnL réel. Donne une estimation "
+             "du nombre de trades qui auraient été skippés par la protection layered "
+             "(-5% hard / -3% soft avec ≥6 open).</p>")
+    buckets = [
+        (">= 0%",       lambda b: b >= 0,                          "ok"),
+        ("[-3%, 0%)",   lambda b: -3.0 <= b < 0,                   "ok"),
+        ("[-5%, -3%)",  lambda b: -5.0 <= b < -3.0,                "warn"),
+        ("&lt;= -5%",   lambda b: b < -5.0,                        "bad"),
+    ]
+    bstats = {label: {"n": 0, "pnl": 0.0, "wins": 0} for label, _, _ in buckets}
+    n_no_btc = 0
+    for r in rows:
+        aid = r.get("alert_id")
+        fp_row = fp_map.get(aid, {})
+        fp = fp_row.get("features_fingerprint") or {}
+        btc = fp.get("btc_change_24h")
+        if btc is None:
+            n_no_btc += 1
+            continue
+        pnl_usd = r.get("pnl_usd") or 0
+        for label, pred, _ in buckets:
+            if pred(float(btc)):
+                bstats[label]["n"] += 1
+                bstats[label]["pnl"] += pnl_usd
+                if pnl_usd > 0: bstats[label]["wins"] += 1
+                break
+    H.append("<table>")
+    H.append("<tr><th>Bucket BTC 24h</th><th style='text-align:right'>Trades</th><th style='text-align:right'>WR</th><th style='text-align:right'>PnL réel</th><th style='text-align:right'>PnL/trade</th><th>Action future</th></tr>")
+    for label, _, kind in buckets:
+        bs = bstats[label]
+        wr_b = (bs["wins"]/bs["n"]*100) if bs["n"] else 0
+        avg = (bs["pnl"]/bs["n"]) if bs["n"] else 0
+        if kind == "bad":
+            action = "🛑 HARD STOP — toujours skippé"
+        elif kind == "warn":
+            action = "⚠️ SOFT CAP si ≥6 open"
+        else:
+            action = "✅ OK"
+        H.append(f"<tr><td>{label}</td><td style='text-align:right'>{bs['n']}</td><td style='text-align:right'>{wr_b:.1f}%</td><td style='text-align:right'>${bs['pnl']:+,.2f}</td><td style='text-align:right'>${avg:+,.2f}</td><td>{action}</td></tr>")
+    if n_no_btc:
+        H.append(f"<tr><td><i>no btc_change_24h</i></td><td style='text-align:right'>{n_no_btc}</td><td colspan='4'>(FP missing field)</td></tr>")
+    H.append("</table>")
+
     # Top 5 lists
     H.append("<div class='top-list'>")
     H.append("<div class='top-list-card'><h3 class='win-h3'>🏆 Top 5 Winners</h3><ol>")

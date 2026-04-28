@@ -277,6 +277,60 @@ def main():
         L.append(f"| `{r}` | {c} | {c/n*100:.1f}% |")
     L.append("")
 
+    # Risk-adjusted metrics (Sharpe with caveat, Profit Factor, Calmar, streaks)
+    sys.path.insert(0, str(Path(__file__).parent))
+    from _risk_metrics import compute_risk_metrics, render_md as render_risk_md, render_paper_md
+    rm = compute_risk_metrics(rows, initial_capital=5000.0)
+    L.extend(render_risk_md(rm))
+    # Paper-trading slippage (Reco #5 Phase 1) — show even if empty
+    L.extend(render_paper_md(rows))
+
+    # BTC 24h bucket distribution — estimates impact of layered BTC dump protection
+    L.append("## 🧊 BTC dump protection — historical impact on dataset")
+    L.append("")
+    L.append("Distribution des trades par bucket `btc_change_24h` (au moment de l'alerte) "
+             "+ PnL réel observé. Donne une estimation du nombre de trades qui auraient été "
+             "skippés par la nouvelle protection layered (-5% hard / -3% soft avec ≥6 open).")
+    L.append("")
+    buckets = [
+        (">= 0%",       lambda b: b >= 0),
+        ("[-3%, 0%)",   lambda b: -3.0 <= b < 0),
+        ("[-5%, -3%)",  lambda b: -5.0 <= b < -3.0),
+        ("<= -5%",      lambda b: b < -5.0),
+    ]
+    bstats = {label: {"n": 0, "pnl": 0.0, "wins": 0} for label, _ in buckets}
+    n_no_btc = 0
+    for r in rows:
+        aid = r.get("alert_id")
+        fp = (fp_map.get(aid, {}) or {}).get("features_fingerprint") or {}
+        btc = fp.get("btc_change_24h")
+        if btc is None:
+            n_no_btc += 1
+            continue
+        pnl_usd = r.get("pnl_usd") or 0
+        for label, pred in buckets:
+            if pred(float(btc)):
+                bstats[label]["n"] += 1
+                bstats[label]["pnl"] += pnl_usd
+                if pnl_usd > 0: bstats[label]["wins"] += 1
+                break
+    L.append("| Bucket BTC 24h | Trades | WR | PnL réel | PnL/trade | Action future |")
+    L.append("|---|---:|---:|---:|---:|---|")
+    for label, _ in buckets:
+        bs = bstats[label]
+        wr_b = (bs["wins"]/bs["n"]*100) if bs["n"] else 0
+        avg = (bs["pnl"]/bs["n"]) if bs["n"] else 0
+        if label == "<= -5%":
+            action = "🛑 HARD STOP — toujours skippé"
+        elif label == "[-5%, -3%)":
+            action = "⚠️ SOFT CAP si ≥6 open"
+        else:
+            action = "✅ OK"
+        L.append(f"| {label} | {bs['n']} | {wr_b:.1f}% | ${bs['pnl']:+,.2f} | ${avg:+,.2f} | {action} |")
+    if n_no_btc:
+        L.append(f"| _no btc_change_24h_ | {n_no_btc} | — | — | — | (FP missing field) |")
+    L.append("")
+
     if invalid_count > 0:
         L.append(f"### ⚠️ Validité du filtre")
         L.append("")
