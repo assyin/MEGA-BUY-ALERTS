@@ -68,7 +68,7 @@ function collapseAll(){document.querySelectorAll('.trade').forEach(d=>d.open=fal
 </script>
 </head><body>
 <h1>🔬 V11B Compression — Trade Audit</h1>
-<div class='subtitle'>Généré : 2026-04-28 14:08 UTC • Filtre : <code>Range 30m ≤ 1.89%</code> ET <code>Range 4h ≤ 2.58%</code> • Exit hybride V7 (TP1+TP2+Trail+SL) • Capital $5,000 (8%/trade)</div>
+<div class='subtitle'>Généré : 2026-04-28 14:42 UTC • Filtre : <code>Range 30m ≤ 1.89%</code> ET <code>Range 4h ≤ 2.58%</code> • Exit hybride V7 (TP1+TP2+Trail+SL) • Capital $5,000 (8%/trade)</div>
 <div class='summary-grid'>
 <div class='summary-card'><div class='label'>Trades fermés</div><div class='value'>199</div></div>
 <div class='summary-card'><div class='label'>Win Rate</div><div class='value win'>85.9%</div><div class='label'>171W / 28L</div></div>
@@ -118,6 +118,11 @@ function collapseAll(){document.querySelectorAll('.trade').forEach(d=>d.open=fal
 <h2>🧪 Paper-trading slippage tracker (Reco #5 Phase 1)</h2>
 <p style='color:#94a3b8;font-size:13px'>Capture du prix Binance ~60s après l'alerte = exécution réaliste. <code>slip &gt; 0</code> = prix monté (fill défavorable). <code>slip &lt; 0</code> = prix redescendu (fill favorable).</p>
 <p style='color:#fcd34d'><i>Pas encore de données paper. Appliquer <code>sql/v11_paper_tracker.sql</code> puis attendre quelques nouveaux trades.</i></p>
+<h2>📊 Paper P&L vs Backtest — Phase 1 critère go/no-go</h2>
+<div style='margin:14px 0;padding:14px 18px;background:rgba(248,113,113,0.15);border-left:4px solid #f87171;color:#fca5a5;border-radius:4px;font-size:14px'>
+<b>Couverture : 0/199 trades (0%)</b> — 199 trades sans paper data (bot restart, Binance error à T+60s, ou close avant T+60s).
+</div>
+<p style='color:#fcd34d'><i>Pas encore de paper P&L. Lancer <code>scripts/backfill_paper_pnl.py</code> ou attendre les nouveaux closes après application du SQL.</i></p>
 <h2>🧊 BTC dump protection — historical impact</h2>
 <p style='color:#94a3b8;font-size:13px'>Distribution des trades par bucket <code>btc_change_24h</code> (au moment de l'alerte) + PnL réel. Donne une estimation du nombre de trades qui auraient été skippés par la protection layered (-5% hard / -3% soft avec ≥6 open).</p>
 <table>

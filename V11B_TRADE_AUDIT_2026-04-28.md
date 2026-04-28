@@ -1,6 +1,6 @@
 # 🔬 Audit detaille V11B Compression — chaque trade, entry & exit
 
-_Genere : 2026-04-28 14:08 UTC_
+_Genere : 2026-04-28 14:42 UTC_
 
 **Filtre V11B** : `Range 30m ≤ 1.89%` ET `Range 4h ≤ 2.58%`
 **Exit hybride V7** : TP1 50%@+10% / TP2 30%@+20% / Trail 20% à -8% du peak / SL initial -8% / Timeout 72h
@@ -62,6 +62,12 @@ _Genere : 2026-04-28 14:08 UTC_
 Capture du prix Binance ~60s après l'alerte = exécution réaliste. `slip > 0` = prix monté après alerte (fill défavorable). `slip < 0` = prix redescendu (fill favorable).
 
 _Pas encore de données paper. Appliquer `sql/v11_paper_tracker.sql` puis attendre quelques nouveaux trades._
+
+## 📊 Paper P&L vs Backtest — Phase 1 critère go/no-go
+
+**Couverture : 0/199 trades (0%)** — 199 trades sans paper data (bot restart, Binance error à T+60s, ou close avant T+60s).
+
+_Pas encore de paper P&L. Lancer `scripts/backfill_paper_pnl.py` ou attendre les nouveaux closes après l'application du SQL._
 
 ## 🧊 BTC dump protection — historical impact on dataset
 
