@@ -64,6 +64,10 @@ interface PortfolioState {
   peak_balance: number
   drawdown_mode: boolean
   daily_loss_today: number
+  // V11 Phase 2 killswitch fields
+  is_suspended?: boolean | null
+  suspended_at?: string | null
+  suspended_reason?: string | null
 }
 
 function toGMT1(dateStr: string): string {
@@ -554,6 +558,10 @@ export default function PortfolioPageClient() {
     peak_balance: Number(rawState.peak_balance ?? 5000),
     drawdown_mode: Boolean(rawState.drawdown_mode ?? false),
     daily_loss_today: Number(rawState.daily_loss_today ?? 0),
+    // V11 Phase 2 killswitch
+    is_suspended: Boolean(rawState.is_suspended ?? false),
+    suspended_at: rawState.suspended_at ?? null,
+    suspended_reason: rawState.suspended_reason ?? null,
   }
   const wr = s.total_trades > 0 ? (s.wins / s.total_trades * 100) : 0
   // WR total: includes partial TP hits from open positions as wins
@@ -717,6 +725,11 @@ export default function PortfolioPageClient() {
             <p className="text-red-400/70 text-sm">Max drawdown depasse 15%. OpenClaw continue de trader avec prudence.</p>
           </div>
         </div>
+      )}
+
+      {/* V11 Killswitch banner — Phase 2 */}
+      {version.startsWith('v11') && s.is_suspended && (
+        <SuspendedBanner version={version} state={s} onResume={loadData} />
       )}
 
       {/* Main Stats */}
@@ -1938,6 +1951,70 @@ function Phase1MetricsTab({ history, variant }: { history: Position[]; variant: 
           <p className="text-xs italic">Ce tab se met à jour à chaque refresh du portfolio (5s).</p>
         </div>
       )}
+    </div>
+  )
+}
+
+// ======================== SUSPENDED BANNER (Phase 2 killswitch) ========================
+// Visible only when state.is_suspended === true. Shows reason + manual resume button.
+
+function SuspendedBanner({ version, state, onResume }: {
+  version: string
+  state: PortfolioState
+  onResume: (showRefresh?: boolean) => Promise<void>
+}) {
+  const [resuming, setResuming] = useState(false)
+  const stateTable = `openclaw_portfolio_state_${version}`
+  const handleResume = async () => {
+    if (!confirm(`Reprendre ${version.toUpperCase()} ?\n\nCela va lever la suspension. ` +
+                 `Le portfolio recommencera à ouvrir des positions au prochain alert qui passe le filtre.`)) return
+    setResuming(true)
+    try {
+      const { error } = await supabase.from(stateTable).update({
+        is_suspended: false,
+        suspended_at: null,
+        suspended_reason: null,
+      }).eq('id', 'main')
+      if (error) {
+        alert(`Erreur lors de la reprise : ${error.message}`)
+      } else {
+        await onResume(true)
+      }
+    } catch (e) {
+      alert(`Erreur : ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setResuming(false)
+    }
+  }
+  const suspendedAtFmt = state.suspended_at ? toGMT1(state.suspended_at) : '—'
+  return (
+    <div className="bg-red-500/10 border-l-4 border-red-500 rounded-xl p-4">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <AlertTriangle className="w-5 h-5 text-red-400" />
+            <h3 className="text-lg font-bold text-red-300">{version.toUpperCase()} SUSPENDED — Killswitch automatique</h3>
+          </div>
+          <p className="text-sm text-red-200/80 mb-1">
+            <span className="font-semibold">Raison :</span> {state.suspended_reason || '(non renseigné)'}
+          </p>
+          <p className="text-xs text-red-200/60">
+            Suspendu depuis <code>{suspendedAtFmt}</code>. Aucun nouvel open jusqu'à reprise manuelle.
+          </p>
+        </div>
+        <button
+          onClick={handleResume}
+          disabled={resuming}
+          className={cn(
+            "px-4 py-2 rounded-lg text-sm font-semibold border transition-colors",
+            resuming
+              ? "bg-gray-700 border-gray-600 text-gray-400 cursor-wait"
+              : "bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30"
+          )}
+        >
+          {resuming ? 'Reprise…' : '▶️ Reprendre les opens'}
+        </button>
+      </div>
     </div>
   )
 }

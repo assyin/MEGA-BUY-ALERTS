@@ -54,6 +54,11 @@ class _PortfolioV11Base:
     PAPER_DELAY_S = 60       # seconds after alert to fetch "realistic" entry price
     PAPER_ENABLE = True      # turn off to disable shadow logging
 
+    # Phase 2 killswitch — auto-suspend on WR degradation (Reco #5 Phase 2)
+    KILLSWITCH_ENABLE = True
+    KILLSWITCH_LOOKBACK_N = 30      # last N closed trades to evaluate
+    KILLSWITCH_WR_THRESHOLD = 0.70  # suspend if WR(last N) < this
+
     # Subclass attrs:
     VARIANT = ""        # 'v11a' .. 'v11e'
     LABEL = ""
@@ -131,6 +136,11 @@ class _PortfolioV11Base:
                                  quality: Optional[Dict] = None,
                                  v11_cache: Optional[Dict] = None) -> Optional[Dict]:
         if "BUY" not in decision:
+            return None
+
+        # Killswitch — block if portfolio is suspended (manual resume only)
+        if self._is_suspended():
+            print(f"💼 {self.VARIANT.upper()} SUSPENDED — open blocked: {pair}")
             return None
 
         # Build cache if not provided (lazy fallback)
@@ -412,6 +422,52 @@ class _PortfolioV11Base:
             f"💰 PnL: *{pnl_pct:+.2f}%* (*${total_realized_pnl:+.2f}*) | "
             f"Bal: *${bal:.0f}* | WR: *{wr:.1f}%*"
         )
+
+        # Phase 2 killswitch — re-evaluate after each close (only if not already suspended)
+        if self.KILLSWITCH_ENABLE and not state.get("is_suspended", False):
+            await self._evaluate_killswitch()
+
+    def _is_suspended(self) -> bool:
+        """Read suspended flag from state (cheap, single SELECT)."""
+        if not self.KILLSWITCH_ENABLE:
+            return False
+        try:
+            r = self.sb.table(self.STATE_TABLE).select("is_suspended").eq("id", "main").single().execute()
+            return bool((r.data or {}).get("is_suspended", False))
+        except Exception:
+            return False  # fail-open: prefer trading over freezing on transient DB errors
+
+    async def _evaluate_killswitch(self):
+        """Suspend portfolio if WR on last N closed trades drops below threshold.
+        Called after each close. No-op if already suspended.
+        """
+        try:
+            r = self.sb.table(self.TABLE).select("pnl_usd,closed_at").eq(
+                "status", "CLOSED"
+            ).order("closed_at", desc=True).limit(self.KILLSWITCH_LOOKBACK_N).execute()
+            recent = r.data or []
+            if len(recent) < self.KILLSWITCH_LOOKBACK_N:
+                return  # not enough sample yet
+            wins = sum(1 for x in recent if (x.get("pnl_usd") or 0) > 0)
+            wr = wins / len(recent)
+            if wr >= self.KILLSWITCH_WR_THRESHOLD:
+                return  # healthy
+            # Trigger suspension
+            reason = f"WR {wr*100:.1f}% < {self.KILLSWITCH_WR_THRESHOLD*100:.0f}% on last {self.KILLSWITCH_LOOKBACK_N} closes"
+            self._update_state({
+                "is_suspended": True,
+                "suspended_at": datetime.now(timezone.utc).isoformat(),
+                "suspended_reason": reason,
+            })
+            print(f"🛑 {self.VARIANT.upper()} SUSPENDED — {reason}")
+            await self._tg(
+                f"🛑 *{self.VARIANT.upper()} SUSPENDED* — auto killswitch\n"
+                f"WR last {self.KILLSWITCH_LOOKBACK_N}: *{wr*100:.1f}%* (seuil {self.KILLSWITCH_WR_THRESHOLD*100:.0f}%)\n"
+                f"_{wins}W / {len(recent)-wins}L_\n"
+                f"Aucun nouvel open jusqu'à reprise manuelle (dashboard ou SQL)."
+            )
+        except Exception as e:
+            print(f"⚠️ {self.VARIANT.upper()} killswitch eval: {e}")
 
     async def start(self):
         self._running = True
