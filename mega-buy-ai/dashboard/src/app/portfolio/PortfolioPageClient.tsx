@@ -45,6 +45,12 @@ interface Position {
   opened_at: string
   closed_at: string | null
   _partial?: string
+  // V11 Phase 1 paper-trading fields (V11a-e only)
+  paper_entry_price?: number | null
+  paper_slippage_pct?: number | null
+  paper_logged_at?: string | null
+  paper_pnl_pct?: number | null
+  paper_pnl_usd?: number | null
 }
 
 interface PortfolioState {
@@ -211,7 +217,7 @@ export default function PortfolioPageClient() {
   const [history, setHistory] = useState<Position[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [tab, setTab] = useState<'overview' | 'positions' | 'history' | 'stats'>('overview')
+  const [tab, setTab] = useState<'overview' | 'positions' | 'history' | 'stats' | 'phase1'>('overview')
   const [closingId, setClosingId] = useState<string | null>(null)
   const [showStrategyInfo, setShowStrategyInfo] = useState<boolean>(true)
 
@@ -727,7 +733,7 @@ export default function PortfolioPageClient() {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         {(['overview', 'positions', 'history', 'stats'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className={cn(
             "px-4 py-2 rounded-lg text-sm font-medium transition-colors border",
@@ -736,6 +742,15 @@ export default function PortfolioPageClient() {
             {t === 'overview' ? `Positions Ouvertes (${filteredPositions.length}${activeFilterCount > 0 ? `/${positions.length}` : ''})` : t === 'positions' ? 'Details' : t === 'history' ? `Historique (${filteredHistory.length}${activeFilterCount > 0 ? `/${history.length}` : ''})` : 'Statistiques'}
           </button>
         ))}
+        {/* Phase 1 tab — V11 variants only (paper trading instrumentation) */}
+        {version.startsWith('v11') && (
+          <button onClick={() => setTab('phase1')} className={cn(
+            "px-4 py-2 rounded-lg text-sm font-medium transition-colors border",
+            tab === 'phase1' ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300" : "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700"
+          )}>
+            🧪 Phase 1
+          </button>
+        )}
       </div>
 
       {/* Filter Bar */}
@@ -1050,6 +1065,10 @@ export default function PortfolioPageClient() {
 
       {tab === 'stats' && (
         <StatsTab history={filteredHistory} initialCapital={s.initial_capital} />
+      )}
+
+      {tab === 'phase1' && version.startsWith('v11') && (
+        <Phase1MetricsTab history={filteredHistory} variant={version} />
       )}
     </div>
   )
@@ -1657,6 +1676,268 @@ function StatCard({ label, value, sub, icon, color }: { label: string; value: st
       </div>
       <div className={cn("text-lg font-bold", color)}>{value}</div>
       {sub && <div className="text-[10px] text-gray-500 mt-0.5">{sub}</div>}
+    </div>
+  )
+}
+
+// ======================== PHASE 1 METRICS TAB ========================
+// Shadow-paper instrumentation report (Reco #5 Phase 1).
+// Coverage banner upfront, Δ WR backtest-vs-paper, slippage, time-series.
+
+function Phase1MetricsTab({ history, variant }: { history: Position[]; variant: string }) {
+  const data = useMemo(() => {
+    const closed = history.filter(t => t.status === 'CLOSED')
+    const nTotal = closed.length
+    const withSlip = closed.filter(t => t.paper_slippage_pct != null && Number.isFinite(Number(t.paper_slippage_pct)))
+    const withPnl = closed.filter(t => t.paper_pnl_pct != null && Number.isFinite(Number(t.paper_pnl_pct)))
+
+    // Coverage
+    const coverage = nTotal > 0 ? (withPnl.length / nTotal) * 100 : 0
+
+    // Slippage stats
+    const slips = withSlip.map(t => Number(t.paper_slippage_pct)).filter(Number.isFinite)
+    const slipAvg = slips.length ? slips.reduce((a, b) => a + b, 0) / slips.length : 0
+    const slipSorted = [...slips].sort((a, b) => a - b)
+    const slipMedian = slipSorted.length ? slipSorted[Math.floor(slipSorted.length / 2)] : 0
+    const slipP95 = slipSorted.length ? slipSorted[Math.min(slipSorted.length - 1, Math.floor(slipSorted.length * 0.95))] : 0
+    const slipPos = slips.filter(s => s > 0).length
+    const slipNeg = slips.filter(s => s < 0).length
+    const slipOver03 = slips.filter(s => Math.abs(s) > 0.3).length
+    const slipOver05 = slips.filter(s => Math.abs(s) > 0.5).length
+
+    // Backtest vs Paper P&L (only on rows with paper_pnl)
+    const btWins = withPnl.filter(t => (t.pnl_usd || 0) > 0).length
+    const btLosses = withPnl.length - btWins
+    const btWr = withPnl.length ? (btWins / withPnl.length) * 100 : 0
+    const btSumUsd = withPnl.reduce((a, t) => a + (t.pnl_usd || 0), 0)
+    const btAvgPct = withPnl.length ? withPnl.reduce((a, t) => a + (t.pnl_pct || 0), 0) / withPnl.length : 0
+
+    const ppWins = withPnl.filter(t => Number(t.paper_pnl_usd || 0) > 0).length
+    const ppLosses = withPnl.length - ppWins
+    const ppWr = withPnl.length ? (ppWins / withPnl.length) * 100 : 0
+    const ppSumUsd = withPnl.reduce((a, t) => a + Number(t.paper_pnl_usd || 0), 0)
+    const ppAvgPct = withPnl.length ? withPnl.reduce((a, t) => a + Number(t.paper_pnl_pct || 0), 0) / withPnl.length : 0
+
+    const deltaWr = ppWr - btWr
+    const absDeltaWr = Math.abs(deltaWr)
+    const verdictKind: 'pass' | 'watch' | 'fail' | 'pending' =
+      withPnl.length === 0 ? 'pending' : absDeltaWr <= 8 ? 'pass' : absDeltaWr <= 10 ? 'watch' : 'fail'
+
+    // Time-series — sort closed-with-paper by closed_at, build cumulative
+    const tsRows = withPnl
+      .filter(t => t.closed_at)
+      .sort((a, b) => new Date(a.closed_at!).getTime() - new Date(b.closed_at!).getTime())
+    let cumBt = 0, cumPp = 0, cumBtWins = 0, cumPpWins = 0
+    const timeSeries = tsRows.map((t, i) => {
+      cumBt += (t.pnl_usd || 0)
+      cumPp += Number(t.paper_pnl_usd || 0)
+      if ((t.pnl_usd || 0) > 0) cumBtWins++
+      if (Number(t.paper_pnl_usd || 0) > 0) cumPpWins++
+      const n = i + 1
+      return {
+        idx: n,
+        pair: t.pair.replace('USDT', ''),
+        slippage: Number(t.paper_slippage_pct || 0),
+        cumBt,
+        cumPp,
+        delta: cumPp - cumBt,
+        wrBt: (cumBtWins / n) * 100,
+        wrPp: (cumPpWins / n) * 100,
+        deltaWr: ((cumPpWins - cumBtWins) / n) * 100,
+      }
+    })
+
+    // BTC bucket distribution (need access to fp.btc_change_24h via positions — not in Position type).
+    // Skipped here: that data lives in agent_memory, not in positions row.
+    return {
+      nTotal, nWithPnl: withPnl.length, nWithSlip: withSlip.length, coverage,
+      slipAvg, slipMedian, slipP95, slipPos, slipNeg, slipOver03, slipOver05,
+      btWins, btLosses, btWr, btSumUsd, btAvgPct,
+      ppWins, ppLosses, ppWr, ppSumUsd, ppAvgPct,
+      deltaWr, absDeltaWr, verdictKind, timeSeries,
+    }
+  }, [history])
+
+  const banner =
+    data.coverage >= 90 ? { bg: 'bg-green-500/10', border: 'border-green-500/40', text: 'text-green-300' } :
+    data.coverage >= 60 ? { bg: 'bg-amber-500/10', border: 'border-amber-500/40', text: 'text-amber-300' } :
+    { bg: 'bg-red-500/10', border: 'border-red-500/40', text: 'text-red-300' }
+
+  const verdictBadge = {
+    pass:    { label: '✅ PASS',    color: 'text-green-300 bg-green-500/15 border-green-500/40' },
+    watch:   { label: '⚠️ WATCH',   color: 'text-amber-300 bg-amber-500/15 border-amber-500/40' },
+    fail:    { label: '🛑 FAIL',    color: 'text-red-300 bg-red-500/15 border-red-500/40' },
+    pending: { label: '⏳ PENDING', color: 'text-gray-300 bg-gray-700/30 border-gray-600' },
+  }[data.verdictKind]
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="bg-cyan-500/5 border border-cyan-500/20 rounded-xl p-4">
+        <h2 className="text-lg font-semibold text-cyan-300 mb-1">🧪 Phase 1 — Paper Trading Instrumentation ({variant.toUpperCase()})</h2>
+        <p className="text-xs text-gray-400">
+          À chaque ouverture V11, le prix Binance est capturé +60s plus tard (= exécution réaliste).
+          Au close, le P&L est recalculé avec ce prix paper. Ce tab mesure le delta backtest-vs-paper
+          pour valider le critère go/no-go avant scaling live.
+        </p>
+      </div>
+
+      {/* Coverage banner */}
+      <div className={cn("rounded-xl p-4 border-l-4", banner.bg, banner.border)}>
+        <div className="flex items-baseline justify-between flex-wrap gap-2">
+          <div>
+            <div className={cn("text-xl font-bold", banner.text)}>
+              Couverture : {data.nWithPnl} / {data.nTotal} trades ({data.coverage.toFixed(0)}%)
+            </div>
+            <div className="text-xs text-gray-400 mt-1">
+              {data.nTotal - data.nWithPnl} sans paper data (bot restart, Binance error à T+60s, ou close avant T+60s).
+              Ratio {'>'}90% = mesure fiable. {'<'}60% = problème d&apos;instrumentation à investiguer.
+            </div>
+          </div>
+          <div className={cn("px-3 py-1.5 text-sm font-bold rounded-lg border", verdictBadge.color)}>
+            {verdictBadge.label}
+          </div>
+        </div>
+      </div>
+
+      {/* Delta WR Table */}
+      <div className="bg-gray-900/60 border border-gray-800 rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium text-gray-300">Backtest vs Paper — Critère go/no-go (Δ WR ≤ 8pts)</h3>
+          {data.nWithPnl < 50 ? (
+            <span className="text-xs text-amber-400">⏳ N={data.nWithPnl} / 50 trades requis</span>
+          ) : (
+            <span className="text-xs text-green-400">✅ N={data.nWithPnl} ≥ 50 — échantillon suffisant</span>
+          )}
+        </div>
+        {data.nWithPnl === 0 ? (
+          <div className="text-sm text-gray-500 italic py-6 text-center">
+            Pas encore de paper P&L sur ce variant. Attendre les nouveaux closes après la fermeture
+            des positions OPEN actuelles.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-500 border-b border-gray-800">
+                  <th className="py-2">Metric</th>
+                  <th className="py-2 text-right">Backtest</th>
+                  <th className="py-2 text-right">Paper</th>
+                  <th className="py-2 text-right">Δ</th>
+                </tr>
+              </thead>
+              <tbody className="text-gray-300">
+                <tr className="border-b border-gray-800/50"><td className="py-2 text-gray-500">Trades comparés</td><td className="text-right">{data.nWithPnl}</td><td className="text-right">{data.nWithPnl}</td><td></td></tr>
+                <tr className="border-b border-gray-800/50"><td className="py-2 text-gray-500">Wins</td><td className="text-right">{data.btWins}</td><td className="text-right">{data.ppWins}</td><td className={cn("text-right", (data.ppWins - data.btWins) >= 0 ? "text-green-400" : "text-red-400")}>{data.ppWins - data.btWins >= 0 ? '+' : ''}{data.ppWins - data.btWins}</td></tr>
+                <tr className="border-b border-gray-800/50"><td className="py-2 text-gray-500">Losses</td><td className="text-right">{data.btLosses}</td><td className="text-right">{data.ppLosses}</td><td className={cn("text-right", (data.ppLosses - data.btLosses) <= 0 ? "text-green-400" : "text-red-400")}>{data.ppLosses - data.btLosses >= 0 ? '+' : ''}{data.ppLosses - data.btLosses}</td></tr>
+                <tr className="border-b border-gray-800/50 font-semibold"><td className="py-2">WR</td><td className="text-right">{data.btWr.toFixed(1)}%</td><td className="text-right">{data.ppWr.toFixed(1)}%</td><td className={cn("text-right", data.absDeltaWr <= 8 ? "text-green-400" : data.absDeltaWr <= 10 ? "text-amber-400" : "text-red-400")}>{data.deltaWr >= 0 ? '+' : ''}{data.deltaWr.toFixed(1)}pts</td></tr>
+                <tr className="border-b border-gray-800/50"><td className="py-2 text-gray-500">Avg PnL/trade</td><td className="text-right">{data.btAvgPct >= 0 ? '+' : ''}{data.btAvgPct.toFixed(2)}%</td><td className="text-right">{data.ppAvgPct >= 0 ? '+' : ''}{data.ppAvgPct.toFixed(2)}%</td><td className={cn("text-right", (data.ppAvgPct - data.btAvgPct) >= 0 ? "text-green-400" : "text-red-400")}>{(data.ppAvgPct - data.btAvgPct) >= 0 ? '+' : ''}{(data.ppAvgPct - data.btAvgPct).toFixed(2)}pt</td></tr>
+                <tr><td className="py-2 text-gray-500">Sum P&L $</td><td className="text-right">{data.btSumUsd >= 0 ? '+' : ''}{formatUsd(data.btSumUsd)}</td><td className="text-right">{data.ppSumUsd >= 0 ? '+' : ''}{formatUsd(data.ppSumUsd)}</td><td className={cn("text-right", (data.ppSumUsd - data.btSumUsd) >= 0 ? "text-green-400" : "text-red-400")}>{(data.ppSumUsd - data.btSumUsd) >= 0 ? '+' : ''}{formatUsd(data.ppSumUsd - data.btSumUsd)}</td></tr>
+              </tbody>
+            </table>
+            <p className="text-[10px] text-gray-600 italic mt-3">
+              Note méthodo : <code>paper_pnl</code> calculé en mode simple <code>(exit − paper_entry) / paper_entry</code>,
+              sans propager les partials. <code>pnl</code> backtest utilise les partials TP1/TP2.
+              Asymétrie acceptée pour Phase 1 — mécanique exacte = sujet Phase 3.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Slippage stats */}
+      <div className="bg-gray-900/60 border border-gray-800 rounded-xl p-4">
+        <h3 className="text-sm font-medium text-gray-300 mb-3">Slippage tracker (entrée +60s vs alerte)</h3>
+        {data.nWithSlip === 0 ? (
+          <div className="text-sm text-gray-500 italic py-6 text-center">Pas encore de slippage data.</div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <MiniStatCard label="N° trades" value={`${data.nWithSlip}`} color="text-gray-200" />
+            <MiniStatCard label="Avg slip" value={`${data.slipAvg >= 0 ? '+' : ''}${data.slipAvg.toFixed(3)}%`} color={Math.abs(data.slipAvg) <= 0.3 ? "text-green-400" : Math.abs(data.slipAvg) <= 0.5 ? "text-amber-400" : "text-red-400"} />
+            <MiniStatCard label="Median" value={`${data.slipMedian >= 0 ? '+' : ''}${data.slipMedian.toFixed(3)}%`} color="text-gray-200" />
+            <MiniStatCard label="P95" value={`${data.slipP95 >= 0 ? '+' : ''}${data.slipP95.toFixed(3)}%`} color="text-gray-200" />
+            <MiniStatCard label="Slip > +0.3%" value={`${data.slipOver03}`} color={data.slipOver03 / Math.max(data.nWithSlip, 1) > 0.2 ? "text-amber-400" : "text-gray-200"} />
+            <MiniStatCard label="Slip > +0.5%" value={`${data.slipOver05}`} color={data.slipOver05 > 0 ? "text-red-400" : "text-gray-200"} />
+            <MiniStatCard label="Up after alert" value={`${data.slipPos}`} color="text-red-400" />
+            <MiniStatCard label="Down after" value={`${data.slipNeg}`} color="text-green-400" />
+          </div>
+        )}
+        {data.nWithSlip > 0 && (
+          <p className="text-[10px] text-gray-600 italic mt-3">
+            Cible Phase 1 (50 trades): slippage moyen ≤ 0.3%. Si {'>'} 0.5% systématique → réaction trop lente
+            ou alertes trop avancées.
+          </p>
+        )}
+      </div>
+
+      {/* Time-series charts */}
+      {data.timeSeries.length >= 2 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <ChartCard title="Slippage par trade (chronologique)">
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={data.timeSeries}>
+                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                <XAxis dataKey="idx" tick={{ fill: COLORS.text, fontSize: 10 }} />
+                <YAxis tick={{ fill: COLORS.text, fontSize: 10 }} unit="%" />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="slippage" name="Slippage %">
+                  {data.timeSeries.map((d, i) => (
+                    <Cell key={i} fill={d.slippage > 0 ? COLORS.red : COLORS.green} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartCard>
+
+          <ChartCard title="Equity cumulée — Backtest vs Paper">
+            <ResponsiveContainer width="100%" height={250}>
+              <LineChart data={data.timeSeries}>
+                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                <XAxis dataKey="idx" tick={{ fill: COLORS.text, fontSize: 10 }} />
+                <YAxis tick={{ fill: COLORS.text, fontSize: 10 }} unit="$" />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend />
+                <Line type="monotone" dataKey="cumBt" name="Backtest $" stroke={COLORS.green} dot={false} strokeWidth={2} />
+                <Line type="monotone" dataKey="cumPp" name="Paper $" stroke={COLORS.cyan} dot={false} strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          </ChartCard>
+
+          <ChartCard title="WR cumulé — Backtest vs Paper">
+            <ResponsiveContainer width="100%" height={250}>
+              <LineChart data={data.timeSeries}>
+                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                <XAxis dataKey="idx" tick={{ fill: COLORS.text, fontSize: 10 }} />
+                <YAxis tick={{ fill: COLORS.text, fontSize: 10 }} unit="%" domain={[0, 100]} />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend />
+                <Line type="monotone" dataKey="wrBt" name="WR Backtest" stroke={COLORS.green} dot={false} strokeWidth={2} />
+                <Line type="monotone" dataKey="wrPp" name="WR Paper" stroke={COLORS.cyan} dot={false} strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          </ChartCard>
+
+          <ChartCard title="Δ WR (Paper − Backtest) cumulé — pts">
+            <ResponsiveContainer width="100%" height={250}>
+              <AreaChart data={data.timeSeries}>
+                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                <XAxis dataKey="idx" tick={{ fill: COLORS.text, fontSize: 10 }} />
+                <YAxis tick={{ fill: COLORS.text, fontSize: 10 }} unit="pts" />
+                <Tooltip content={<CustomTooltip />} />
+                <Area type="monotone" dataKey="deltaWr" stroke={COLORS.purple} fill={COLORS.purple} fillOpacity={0.3} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </ChartCard>
+        </div>
+      )}
+
+      {/* Footnote: if no time-series yet */}
+      {data.timeSeries.length < 2 && data.nWithPnl === 0 && (
+        <div className="bg-gray-900/40 border border-gray-800 rounded-xl p-6 text-center text-sm text-gray-500">
+          <Clock className="w-8 h-8 text-gray-600 mx-auto mb-2" />
+          <p className="mb-1">Les charts apparaîtront automatiquement dès que ≥2 trades fermés auront paper P&L.</p>
+          <p className="text-xs italic">Ce tab se met à jour à chaque refresh du portfolio (5s).</p>
+        </div>
+      )}
     </div>
   )
 }
