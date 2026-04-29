@@ -133,18 +133,35 @@ def build_markdown(data: dict) -> str:
     b_pnl_w = sum((r.get("pnl_usd") or 0) for r in b["closes_window"])
     b_susp = bst.get("is_suspended")
     b_susp_emoji = "🛑 SUSPENDED" if b_susp else "✅ active"
+    b_initial = bst.get("initial_capital", 5000)
     b_balance = bst.get("balance", 5000)
     b_total_pnl = bst.get("total_pnl", 0)
+    b_return_pct = (b_total_pnl / b_initial * 100) if b_initial else 0
     b_dd = bst.get("max_drawdown_pct", 0)
+    b_in_pos = sum(float(p.get("size_usd") or 0) * float(p.get("remaining_size_pct") or 1) for p in b["opens"])
+    b_unrealized = sum(float(p.get("size_usd") or 0)
+                       * float(p.get("remaining_size_pct") or 1)
+                       * float(p.get("pnl_pct") or 0) / 100 for p in b["opens"])
+    b_equity = b_balance + b_in_pos + b_unrealized
+    b_partial_wins = sum(1 for p in b["opens"]
+                         if p.get("partial1_done") or p.get("partial2_done"))
+    b_wr_total = ((bw + b_partial_wins) / max(bn + b_partial_wins, 1)) * 100
+    b_daily_loss = bst.get("daily_loss_today", 0)
 
     L.append("━━━━━ ⭐ <b>V11B Focus</b> (variant principal) ━━━━━")
-    L.append(f"Status: <b>{b_susp_emoji}</b> | Balance: <b>${b_balance:,.0f}</b> "
-             f"(PnL <b>${b_total_pnl:+,.0f}</b>, DD {b_dd:.2f}%)")
-    L.append(f"WR all-time: <b>{bwr:.1f}%</b> ({bw}W/{bl_}L on {bn}) | "
-             f"WR last 30: <b>{b['wr_last30']:.1f}%</b>")
-    L.append(f"Open: <b>{len(b['opens'])}/12</b> | "
-             f"Closes {window_h:.0f}h: <b>{b_closes_w}</b> "
-             f"(${b_pnl_w:+,.0f}) | Paper data: <b>{b_paper_n}/{bn}</b> "
+    L.append(f"Status: <b>{b_susp_emoji}</b>")
+    L.append(f"💰 Equity: <b>${b_equity:,.2f}</b>")
+    L.append(f"   Balance: <b>${b_balance:,.2f}</b> (Initial ${b_initial:,.0f})")
+    L.append(f"   PnL Total: <b>${b_total_pnl:+,.2f}</b> ({b_return_pct:+.2f}%)")
+    L.append(f"   Non-realisé: <b>${b_unrealized:+,.2f}</b> ({len(b['opens'])} positions)")
+    L.append(f"📊 WR Total: <b>{b_wr_total:.1f}%</b> "
+             f"({bw + b_partial_wins}W/{bl_}L on {bn + b_partial_wins} +{b_partial_wins} TP)")
+    L.append(f"   WR Fermés: <b>{bwr:.1f}%</b> ({bw}W/{bl_}L on {bn})")
+    L.append(f"   WR last 30: <b>{b['wr_last30']:.1f}%</b> (seuil killswitch 70%)")
+    L.append(f"📂 Positions: <b>{len(b['opens'])}/12</b> (${b_in_pos:,.0f} alloué)")
+    L.append(f"🛡 Max DD: <b>{b_dd:.2f}%</b> | Perte jour: ${b_daily_loss:,.2f}")
+    L.append(f"📉 Closes {window_h:.0f}h: <b>{b_closes_w}</b> "
+             f"(${b_pnl_w:+,.0f}) | Paper: <b>{b_paper_n}/{bn}</b> "
              f"({b_paper_n/max(bn,1)*100:.0f}%)")
     # Phase 1 progress bar (vers le seuil N=50)
     if b_paper_n < 50:
@@ -229,7 +246,9 @@ def build_markdown(data: dict) -> str:
 
 
 def _v11b_focus_html(data: dict) -> list:
-    """V11B-specific focus block — front-and-center since c'est le variant suivi."""
+    """V11B-specific focus block — front-and-center since c'est le variant suivi.
+    Stats alignés sur le dashboard /portfolio (Equity, Balance/Initial, PnL%,
+    Non-realise, WR Total/Fermes, Positions, Max DD, Perte Jour)."""
     b = data["variants"]["v11b"]
     bst = b["state"]
     window_h = data["window_h"]
@@ -240,6 +259,27 @@ def _v11b_focus_html(data: dict) -> list:
     n_window = len(b["closes_window"])
     pnl_window = sum((r.get("pnl_usd") or 0) for r in b["closes_window"])
     susp = bst.get("is_suspended")
+
+    # Compute dashboard-equivalent stats
+    initial = bst.get("initial_capital", 5000)
+    balance = bst.get("balance", 5000)
+    total_pnl = bst.get("total_pnl", 0)
+    return_pct = (total_pnl / initial * 100) if initial else 0
+    in_positions = sum(float(p.get("size_usd") or 0) * float(p.get("remaining_size_pct") or 1)
+                       for p in b["opens"])
+    unrealized = sum(float(p.get("size_usd") or 0)
+                     * float(p.get("remaining_size_pct") or 1)
+                     * float(p.get("pnl_pct") or 0) / 100 for p in b["opens"])
+    equity = balance + in_positions + unrealized
+    partial_wins = sum(1 for p in b["opens"]
+                       if p.get("partial1_done") or p.get("partial2_done"))
+    total_wins_with_partials = bw + partial_wins
+    total_trades_with_partials = bn + partial_wins
+    wr_total = (total_wins_with_partials / max(total_trades_with_partials, 1)) * 100
+    max_pos = 12  # V11 base MAX_POSITIONS
+    daily_loss = bst.get("daily_loss_today", 0)
+    max_dd = bst.get("max_drawdown_pct", 0)
+    drawdown_mode = bst.get("drawdown_mode", False)
 
     H = []
     # Big highlighted box
@@ -259,20 +299,54 @@ def _v11b_focus_html(data: dict) -> list:
         H.append(f"<b>Raison :</b> <code>{bst.get('suspended_reason', '?')}</code>")
         H.append(f"</div>")
 
-    # Key stats grid
+    # Stats grid — match dashboard /portfolio exactly (9 cards)
     H.append("<div class='grid' style='margin-top:14px'>")
-    for label, value, color in [
-        ("Balance", f"${bst.get('balance', 5000):,.0f}", "#15803d" if bst.get("balance", 5000) >= 5000 else "#b91c1c"),
-        ("PnL Total", f"${bst.get('total_pnl', 0):+,.2f}", "#15803d" if bst.get("total_pnl", 0) >= 0 else "#b91c1c"),
-        ("WR all-time", f"{bwr:.1f}%", "#15803d" if bwr >= 75 else "#a16207"),
-        ("WR last 30", f"{b['wr_last30']:.1f}%", "#15803d" if b['wr_last30'] >= 75 else "#a16207" if b['wr_last30'] >= 70 else "#b91c1c"),
-        ("Trades total", f"{bw}W / {bl_}L ({bn})", "#1f2937"),
-        ("Open positions", f"{len(b['opens'])} / 12", "#1f2937"),
-        ("Closes window", f"{n_window} (${pnl_window:+,.0f})", "#15803d" if pnl_window >= 0 else "#b91c1c"),
-        ("Max DD", f"{bst.get('max_drawdown_pct', 0):.2f}%", "#15803d" if bst.get('max_drawdown_pct', 0) < 5 else "#a16207"),
+    cards = [
+        ("Equity", f"${equity:,.2f}", None,
+         "#15803d" if equity >= initial else "#b91c1c"),
+        ("Balance", f"${balance:,.2f}", f"Initial: ${initial:,.2f}",
+         "#0369a1"),
+        ("PnL Total", f"${total_pnl:+,.2f}", f"{return_pct:+.2f}%",
+         "#15803d" if total_pnl >= 0 else "#b91c1c"),
+        ("Non-realisé", f"${unrealized:+,.2f}", f"{len(b['opens'])} positions",
+         "#15803d" if unrealized >= 0 else "#b91c1c"),
+        ("WR Total", f"{wr_total:.1f}%",
+         f"{total_wins_with_partials}W/{bl_}L ({total_trades_with_partials}) +{partial_wins} TP",
+         "#15803d" if wr_total >= 75 else "#a16207"),
+        ("WR Fermés", f"{bwr:.1f}%", f"{bw}W/{bl_}L ({bn})",
+         "#15803d" if bwr >= 75 else "#a16207"),
+        ("Positions", f"{len(b['opens'])}/{max_pos}", f"${in_positions:,.0f} alloc",
+         "#0369a1"),
+        ("Max DD", f"{max_dd:.2f}%", "⚠️ ACTIF" if drawdown_mode else "OK",
+         "#b91c1c" if max_dd > 10 else "#15803d"),
+        ("Perte Jour", f"${daily_loss:,.2f}", "max 5%",
+         "#b91c1c" if daily_loss > initial * 0.03 else "#6b7280"),
+    ]
+    for label, value, sub, color in cards:
+        H.append(f"<div class='card'>")
+        H.append(f"<div class='label'>{label}</div>")
+        H.append(f"<div class='value' style='color:{color}'>{value}</div>")
+        if sub:
+            H.append(f"<div class='label' style='font-size:10px;color:#6b7280;margin-top:2px;text-transform:none;letter-spacing:0'>{sub}</div>")
+        H.append(f"</div>")
+    H.append("</div>")
+
+    # Window-specific summary (closes + WR last 30)
+    H.append("<div class='grid' style='margin-top:10px'>")
+    for label, value, sub, color in [
+        (f"Closes {window_h:.0f}h", f"{n_window} (${pnl_window:+,.0f})", "réalisés window",
+         "#15803d" if pnl_window >= 0 else "#b91c1c"),
+        ("WR last 30", f"{b['wr_last30']:.1f}%", f"({b['n_last30']} trades) — seuil killswitch 70%",
+         "#15803d" if b['wr_last30'] >= 75 else "#a16207" if b['wr_last30'] >= 70 else "#b91c1c"),
+        ("Paper data", f"{n_paper}/{bn}", f"{n_paper/max(bn,1)*100:.0f}% couverture",
+         "#15803d" if n_paper >= 50 else "#6b7280"),
     ]:
-        H.append(f"<div class='card'><div class='label'>{label}</div>"
-                 f"<div class='value' style='color:{color}'>{value}</div></div>")
+        H.append(f"<div class='card'>")
+        H.append(f"<div class='label'>{label}</div>")
+        H.append(f"<div class='value' style='color:{color}'>{value}</div>")
+        if sub:
+            H.append(f"<div class='label' style='font-size:10px;color:#6b7280;margin-top:2px;text-transform:none;letter-spacing:0'>{sub}</div>")
+        H.append(f"</div>")
     H.append("</div>")
 
     # Phase 1 progress
