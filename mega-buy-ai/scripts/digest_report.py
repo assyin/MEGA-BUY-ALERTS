@@ -300,8 +300,8 @@ def _v11b_focus_html(data: dict) -> list:
         H.append(f"<b>Raison :</b> <code>{bst.get('suspended_reason', '?')}</code>")
         H.append(f"</div>")
 
-    # Stats grid — match dashboard /portfolio exactly (9 cards)
-    H.append("<div class='grid' style='margin-top:14px'>")
+    # Stats — match dashboard /portfolio exactly (4 rows × 3 cols)
+    # Use <table> for reliable horizontal layout across ALL email clients
     cards = [
         ("Equity", f"${equity:,.2f}", None,
          "#15803d" if equity >= initial else "#b91c1c"),
@@ -322,33 +322,42 @@ def _v11b_focus_html(data: dict) -> list:
          "#b91c1c" if max_dd > 10 else "#15803d"),
         ("Perte Jour", f"${daily_loss:,.2f}", "max 5%",
          "#b91c1c" if daily_loss > initial * 0.03 else "#6b7280"),
-    ]
-    for label, value, sub, color in cards:
-        H.append(f"<div class='card'>")
-        H.append(f"<div class='label'>{label}</div>")
-        H.append(f"<div class='value' style='color:{color}'>{value}</div>")
-        if sub:
-            H.append(f"<div class='label' style='font-size:10px;color:#6b7280;margin-top:2px;text-transform:none;letter-spacing:0'>{sub}</div>")
-        H.append(f"</div>")
-    H.append("</div>")
-
-    # Window-specific summary (closes + WR last 30)
-    H.append("<div class='grid' style='margin-top:10px'>")
-    for label, value, sub, color in [
         (f"Closes {window_h:.0f}h", f"{n_window} (${pnl_window:+,.0f})", "réalisés window",
          "#15803d" if pnl_window >= 0 else "#b91c1c"),
-        ("WR last 30", f"{b['wr_last30']:.1f}%", f"({b['n_last30']} trades) — seuil killswitch 70%",
+        ("WR last 30", f"{b['wr_last30']:.1f}%", f"({b['n_last30']} trades) — seuil 70%",
          "#15803d" if b['wr_last30'] >= 75 else "#a16207" if b['wr_last30'] >= 70 else "#b91c1c"),
         ("Paper data", f"{n_paper}/{bn}", f"{n_paper/max(bn,1)*100:.0f}% couverture",
          "#15803d" if n_paper >= 50 else "#6b7280"),
-    ]:
-        H.append(f"<div class='card'>")
-        H.append(f"<div class='label'>{label}</div>")
-        H.append(f"<div class='value' style='color:{color}'>{value}</div>")
-        if sub:
-            H.append(f"<div class='label' style='font-size:10px;color:#6b7280;margin-top:2px;text-transform:none;letter-spacing:0'>{sub}</div>")
-        H.append(f"</div>")
-    H.append("</div>")
+    ]
+
+    # Table layout — 3 columns × 4 rows. Tables = universal email compat.
+    H.append("<table style='border-collapse:separate;border-spacing:8px;width:100%;margin-top:14px;border:none' cellpadding='0' cellspacing='0'>")
+    for i in range(0, len(cards), 3):
+        H.append("<tr>")
+        for j in range(3):
+            if i + j >= len(cards):
+                H.append("<td style='width:33.33%;border:none'></td>")
+                continue
+            label, value, sub, color = cards[i + j]
+            H.append(
+                "<td style='width:33.33%;background:#f9fafb;border:1px solid #e5e7eb;"
+                "border-radius:6px;padding:10px 12px;vertical-align:top'>"
+            )
+            H.append(
+                f"<div style='font-size:10px;color:#6b7280;text-transform:uppercase;"
+                f"letter-spacing:0.5px;font-weight:600'>{label}</div>"
+            )
+            H.append(
+                f"<div style='font-size:18px;font-weight:bold;margin-top:3px;"
+                f"color:{color}'>{value}</div>"
+            )
+            if sub:
+                H.append(
+                    f"<div style='font-size:11px;color:#6b7280;margin-top:3px'>{sub}</div>"
+                )
+            H.append("</td>")
+        H.append("</tr>")
+    H.append("</table>")
 
     # Phase 1 progress
     H.append("<h3 style='margin-top:14px;margin-bottom:6px'>Phase 1 — Critère go/no-go (Δ WR ≤ 8 pts)</h3>")

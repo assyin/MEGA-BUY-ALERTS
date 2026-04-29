@@ -70,6 +70,11 @@ class _PortfolioV11Base:
         self.telegram_bot = telegram_bot
         self._running = False
         self._task = None
+        # Strong refs for fire-and-forget asyncio tasks (paper logger, etc.)
+        # Without this, asyncio.create_task() keeps only a WEAK ref → tasks can
+        # be garbage-collected mid-sleep. Bug discovered 2026-04-29 when 0 paper
+        # data accumulated for 24h despite live opens.
+        self._bg_tasks: set = set()
         from supabase import create_client
         self.sb = create_client(self.settings.supabase_url, self.settings.supabase_service_key)
         self._ensure_state()
@@ -224,9 +229,13 @@ class _PortfolioV11Base:
         self._update_state({"balance": round(balance - size_usd, 2)})
         print(f"💼 {self.VARIANT.upper()} OPENED: {pair} — {confidence*100:.0f}% — ${size_usd:.0f} @ {price}")
 
-        # Schedule paper-trading slippage capture (best-effort, non-blocking)
+        # Schedule paper-trading slippage capture (best-effort, non-blocking).
+        # IMPORTANT: keep a strong ref in self._bg_tasks — otherwise the event
+        # loop's weak reference lets the GC collect the task during the 60s sleep.
         if self.PAPER_ENABLE:
-            asyncio.create_task(self._log_paper_entry(position["id"], pair, price))
+            task = asyncio.create_task(self._log_paper_entry(position["id"], pair, price))
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
 
         await self._tg(
             f"🆕 *{self.VARIANT.upper()} OPEN* — `{pair}`\n"
