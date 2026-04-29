@@ -132,18 +132,29 @@ def main():
     archive.write_text(html, encoding="utf-8")
     print(f"  📂 Archive: {archive}", file=sys.stderr)
 
-    # Subject lines reflect health
-    n_susp = sum(1 for v in ('v11a','v11b','v11c','v11d','v11e')
-                 if data["variants"][v]["state"].get("is_suspended"))
-    n_closes = sum(len(data["variants"][v]["closes_window"])
-                   for v in ('v11a','v11b','v11c','v11d','v11e'))
-    if n_susp > 0:
-        prefix = f"🛑 [{n_susp} SUSPENDED]"
-    elif n_closes > 0:
-        prefix = f"📊 [{n_closes} closes]"
+    # Subject lines — V11B-centric since c'est notre variant principal
+    b = data["variants"]["v11b"]
+    bst = b["state"]
+    bn = bst.get("total_trades", 0); bw = bst.get("wins", 0)
+    bwr = (bw / max(bn, 1)) * 100 if bn else 0
+    b_susp = bst.get("is_suspended")
+    b_closes = len(b["closes_window"])
+    b_pnl = sum((r.get("pnl_usd") or 0) for r in b["closes_window"])
+
+    n_susp_total = sum(1 for v in ('v11a','v11b','v11c','v11d','v11e')
+                       if data["variants"][v]["state"].get("is_suspended"))
+
+    if b_susp:
+        prefix = "🛑 V11B SUSPENDED"
+    elif b_closes > 0:
+        prefix = f"📊 V11B WR {bwr:.0f}% • {b_closes} closes ${b_pnl:+,.0f}"
     else:
-        prefix = "📊"
-    subject = f"{prefix} V11 Digest — {data['now'].strftime('%Y-%m-%d %H:%M UTC')}"
+        prefix = f"📊 V11B WR {bwr:.0f}% • idle"
+
+    if n_susp_total > 0 and not b_susp:
+        prefix += f" [+{n_susp_total} other suspended]"
+
+    subject = f"{prefix} — {data['now'].strftime('%Y-%m-%d %H:%M UTC')}"
 
     if not args.no_telegram:
         send_telegram(s.telegram_token, s.telegram_chat_id, md)

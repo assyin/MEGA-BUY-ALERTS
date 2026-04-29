@@ -123,10 +123,66 @@ def build_markdown(data: dict) -> str:
     L.append(f"🪙 BTC 24h: <b>{_h(btc_str)}</b> | Dominance: {data['btc_dominance']:.1f}%")
     L.append("")
 
-    # Summary table
+    # ━━━━━━━━━━ V11B FOCUS — variant principal ━━━━━━━━━━
+    b = data["variants"]["v11b"]
+    bst = b["state"]
+    bn = bst.get("total_trades", 0); bw = bst.get("wins", 0); bl_ = bst.get("losses", 0)
+    bwr = (bw / max(bn, 1)) * 100 if bn else 0
+    b_paper_n = len(b["with_paper_pnl"])
+    b_closes_w = len(b["closes_window"])
+    b_pnl_w = sum((r.get("pnl_usd") or 0) for r in b["closes_window"])
+    b_susp = bst.get("is_suspended")
+    b_susp_emoji = "🛑 SUSPENDED" if b_susp else "✅ active"
+    b_balance = bst.get("balance", 5000)
+    b_total_pnl = bst.get("total_pnl", 0)
+    b_dd = bst.get("max_drawdown_pct", 0)
+
+    L.append("━━━━━ ⭐ <b>V11B Focus</b> (variant principal) ━━━━━")
+    L.append(f"Status: <b>{b_susp_emoji}</b> | Balance: <b>${b_balance:,.0f}</b> "
+             f"(PnL <b>${b_total_pnl:+,.0f}</b>, DD {b_dd:.2f}%)")
+    L.append(f"WR all-time: <b>{bwr:.1f}%</b> ({bw}W/{bl_}L on {bn}) | "
+             f"WR last 30: <b>{b['wr_last30']:.1f}%</b>")
+    L.append(f"Open: <b>{len(b['opens'])}/12</b> | "
+             f"Closes {window_h:.0f}h: <b>{b_closes_w}</b> "
+             f"(${b_pnl_w:+,.0f}) | Paper data: <b>{b_paper_n}/{bn}</b> "
+             f"({b_paper_n/max(bn,1)*100:.0f}%)")
+    # Phase 1 progress bar (vers le seuil N=50)
+    if b_paper_n < 50:
+        bar_len = 20
+        filled = int(bar_len * min(b_paper_n / 50, 1))
+        bar = "█" * filled + "░" * (bar_len - filled)
+        L.append(f"Phase 1: <code>{bar}</code> {b_paper_n}/50 trades paper requis")
+    else:
+        # Compute delta WR if we have data
+        with_paper = b["with_paper_pnl"]
+        bt_w = sum(1 for r in with_paper if (r.get("pnl_usd") or 0) > 0)
+        pp_w = sum(1 for r in with_paper if (r.get("paper_pnl_usd") or 0) > 0)
+        bt_wr = bt_w / len(with_paper) * 100
+        pp_wr = pp_w / len(with_paper) * 100
+        d_wr = pp_wr - bt_wr
+        if abs(d_wr) <= 8: verdict = "✅ PASS (≤8pts)"
+        elif abs(d_wr) <= 10: verdict = "⚠️ WATCH (8-10pts)"
+        else: verdict = "🛑 FAIL (>10pts)"
+        L.append(f"Phase 1: <b>Δ WR {d_wr:+.1f}pts</b> "
+                 f"(BT {bt_wr:.1f}% / Paper {pp_wr:.1f}%) — {verdict}")
+    # V11B closes details if any in window
+    if b_closes_w > 0:
+        L.append(f"Closes V11B {window_h:.0f}h:")
+        for r in b["closes_window"][:6]:
+            pnl = r.get("pnl_usd") or 0
+            emoji = "✅" if pnl > 0 else "❌"
+            reason = (r.get("close_reason") or "?").split(":", 1)[-1]
+            L.append(f"  {emoji} <code>{_h(r.get('pair'))}</code> "
+                     f"{r.get('pnl_pct') or 0:+.1f}% (${pnl:+.1f}) — {_h(reason)}")
+    if b_susp:
+        L.append(f"⚠️ Raison suspension: {_h(bst.get('suspended_reason', '?'))}")
+    L.append("")
+
+    # ━━━━━━━━━━ Vue d'ensemble 5 variants (contexte) ━━━━━━━━━━
     n_suspended = sum(1 for v in VARIANTS if data["variants"][v]["state"].get("is_suspended"))
     total_closes_window = sum(len(data["variants"][v]["closes_window"]) for v in VARIANTS)
     total_opens = sum(len(data["variants"][v]["opens"]) for v in VARIANTS)
+    L.append("━━━━━ Vue d'ensemble 5 variants ━━━━━")
     L.append(f"🛑 Suspended: <b>{n_suspended}/5</b> | "
              f"📉 Closes ({window_h:.0f}h): <b>{total_closes_window}</b> | "
              f"📂 Open: <b>{total_opens}</b>")
@@ -172,27 +228,157 @@ def build_markdown(data: dict) -> str:
     return "\n".join(L)
 
 
+def _v11b_focus_html(data: dict) -> list:
+    """V11B-specific focus block — front-and-center since c'est le variant suivi."""
+    b = data["variants"]["v11b"]
+    bst = b["state"]
+    window_h = data["window_h"]
+    bn = bst.get("total_trades", 0); bw = bst.get("wins", 0); bl_ = bst.get("losses", 0)
+    bwr = (bw / max(bn, 1)) * 100 if bn else 0
+    paper_rows = b["with_paper_pnl"]
+    n_paper = len(paper_rows)
+    n_window = len(b["closes_window"])
+    pnl_window = sum((r.get("pnl_usd") or 0) for r in b["closes_window"])
+    susp = bst.get("is_suspended")
+
+    H = []
+    # Big highlighted box
+    bg_color = "#fef2f2" if susp else "#eff6ff"
+    border_color = "#dc2626" if susp else "#0369a1"
+    H.append(f"<div style='background:{bg_color};border:2px solid {border_color};border-radius:8px;padding:16px 20px;margin:20px 0'>")
+    status_icon = "🛑" if susp else "⭐"
+    status_label = "SUSPENDED" if susp else "ACTIVE"
+    status_color = "#dc2626" if susp else "#15803d"
+    H.append(f"<div style='display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px'>")
+    H.append(f"<h2 style='margin:0;color:{border_color};border:none;font-size:18px'>{status_icon} V11B Focus — variant principal</h2>")
+    H.append(f"<span style='font-weight:700;color:{status_color}'>{status_label}</span>")
+    H.append(f"</div>")
+
+    if susp:
+        H.append(f"<div style='margin-top:8px;padding:8px 12px;background:#ffffff;border-left:3px solid #dc2626;border-radius:3px;color:#991b1b'>")
+        H.append(f"<b>Raison :</b> <code>{bst.get('suspended_reason', '?')}</code>")
+        H.append(f"</div>")
+
+    # Key stats grid
+    H.append("<div class='grid' style='margin-top:14px'>")
+    for label, value, color in [
+        ("Balance", f"${bst.get('balance', 5000):,.0f}", "#15803d" if bst.get("balance", 5000) >= 5000 else "#b91c1c"),
+        ("PnL Total", f"${bst.get('total_pnl', 0):+,.2f}", "#15803d" if bst.get("total_pnl", 0) >= 0 else "#b91c1c"),
+        ("WR all-time", f"{bwr:.1f}%", "#15803d" if bwr >= 75 else "#a16207"),
+        ("WR last 30", f"{b['wr_last30']:.1f}%", "#15803d" if b['wr_last30'] >= 75 else "#a16207" if b['wr_last30'] >= 70 else "#b91c1c"),
+        ("Trades total", f"{bw}W / {bl_}L ({bn})", "#1f2937"),
+        ("Open positions", f"{len(b['opens'])} / 12", "#1f2937"),
+        ("Closes window", f"{n_window} (${pnl_window:+,.0f})", "#15803d" if pnl_window >= 0 else "#b91c1c"),
+        ("Max DD", f"{bst.get('max_drawdown_pct', 0):.2f}%", "#15803d" if bst.get('max_drawdown_pct', 0) < 5 else "#a16207"),
+    ]:
+        H.append(f"<div class='card'><div class='label'>{label}</div>"
+                 f"<div class='value' style='color:{color}'>{value}</div></div>")
+    H.append("</div>")
+
+    # Phase 1 progress
+    H.append("<h3 style='margin-top:14px;margin-bottom:6px'>Phase 1 — Critère go/no-go (Δ WR ≤ 8 pts)</h3>")
+    if n_paper == 0:
+        H.append("<p class='muted'><i>Pas encore de paper data accumulée. Le système attend les premiers nouveaux opens (les positions OPEN actuelles doivent d'abord se fermer).</i></p>")
+    elif n_paper < 50:
+        pct = n_paper / 50 * 100
+        H.append(f"<div style='background:#f3f4f6;border-radius:6px;overflow:hidden;height:20px;position:relative'>")
+        H.append(f"<div style='background:#0369a1;height:100%;width:{pct:.0f}%;transition:width 0.3s'></div>")
+        H.append(f"</div>")
+        H.append(f"<p class='muted' style='margin-top:6px;font-size:12px'>{n_paper} / 50 trades paper requis "
+                 f"({pct:.0f}%) — collecte en cours</p>")
+    else:
+        bt_w = sum(1 for r in paper_rows if (r.get("pnl_usd") or 0) > 0)
+        pp_w = sum(1 for r in paper_rows if (r.get("paper_pnl_usd") or 0) > 0)
+        bt_wr = bt_w / n_paper * 100
+        pp_wr = pp_w / n_paper * 100
+        delta = pp_wr - bt_wr
+        abs_d = abs(delta)
+        if abs_d <= 8: verdict = ("✅ PASS", "#15803d", "#f0fdf4")
+        elif abs_d <= 10: verdict = ("⚠️ WATCH", "#a16207", "#fef3c7")
+        else: verdict = ("🛑 FAIL", "#b91c1c", "#fef2f2")
+        H.append(f"<div style='background:{verdict[2]};padding:10px 14px;border-radius:6px;border-left:4px solid {verdict[1]}'>")
+        H.append(f"<b style='color:{verdict[1]};font-size:15px'>{verdict[0]}</b> — Δ WR <b>{delta:+.1f} pts</b> "
+                 f"(Backtest {bt_wr:.1f}% / Paper {pp_wr:.1f}%) sur {n_paper} trades")
+        H.append("</div>")
+
+    # Closes V11B in window — detailed
+    if n_window > 0:
+        H.append(f"<h3 style='margin-top:14px;margin-bottom:6px'>Closes V11B — dernières {window_h:.0f}h ({n_window} trades)</h3>")
+        H.append("<table>")
+        H.append("<tr><th>Pair</th><th>PnL %</th><th>PnL $</th><th>Reason</th><th>Hold</th><th>Slippage</th><th>Paper PnL</th></tr>")
+        for r in b["closes_window"]:
+            pnl = r.get("pnl_usd") or 0
+            cls = "win" if pnl > 0 else "lose"
+            reason = (r.get("close_reason") or "?").split(":", 1)[-1]
+            opened = parse_iso(r.get("opened_at")); closed = parse_iso(r.get("closed_at"))
+            hold = fmt_age((closed - opened).total_seconds() / 3600) if opened and closed else "—"
+            slip = r.get("paper_slippage_pct")
+            slip_str = f"{slip:+.3f}%" if slip is not None else "—"
+            ppnl = r.get("paper_pnl_pct")
+            ppnl_str = f"{ppnl:+.2f}%" if ppnl is not None else "<span class='muted'>—</span>"
+            H.append(f"<tr><td><b>{r.get('pair')}</b></td>"
+                     f"<td class='{cls}'>{r.get('pnl_pct') or 0:+.2f}%</td>"
+                     f"<td class='{cls}'>${pnl:+,.2f}</td>"
+                     f"<td><code>{reason}</code></td>"
+                     f"<td>{hold}</td>"
+                     f"<td>{slip_str}</td>"
+                     f"<td>{ppnl_str}</td></tr>")
+        H.append("</table>")
+
+    # Open positions V11B summary
+    if b["opens"]:
+        H.append(f"<h3 style='margin-top:14px;margin-bottom:6px'>Positions ouvertes V11B ({len(b['opens'])})</h3>")
+        H.append("<table>")
+        H.append("<tr><th>Pair</th><th>Entry</th><th>PnL %</th><th>Hold</th><th>Time-to-timeout</th><th>TP1?</th><th>TP2?</th></tr>")
+        for r in sorted(b["opens"], key=lambda x: x.get("opened_at", ""), reverse=False):
+            pnl = r.get("pnl_pct") or 0
+            cls = "win" if pnl > 0 else "lose"
+            o = parse_iso(r.get("opened_at"))
+            age_h = (data["now"] - o).total_seconds() / 3600 if o else 0
+            ttt_h = max(0, 72 - age_h)
+            ttt = fmt_age(ttt_h) if ttt_h > 0 else "TIMEOUT NOW"
+            ttt_color = "lose" if ttt_h < 12 else "warn" if ttt_h < 24 else "muted"
+            H.append(f"<tr><td><b>{r.get('pair')}</b></td>"
+                     f"<td>${r.get('entry_price', 0):.6f}</td>"
+                     f"<td class='{cls}'>{pnl:+.2f}%</td>"
+                     f"<td>{fmt_age(age_h)}</td>"
+                     f"<td class='{ttt_color}'>{ttt}</td>"
+                     f"<td>{'✅' if r.get('partial1_done') else '—'}</td>"
+                     f"<td>{'✅' if r.get('partial2_done') else '—'}</td></tr>")
+        H.append("</table>")
+
+    H.append("</div>")  # close focus box
+    return H
+
+
 def build_html(data: dict) -> str:
     """Full HTML for email — detailed, same depth as audit reports."""
     now = data["now"]; window_h = data["window_h"]
     H = []
     H.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>")
     H.append("<style>")
-    H.append("body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;padding:20px;max-width:1100px;margin:auto;font-size:14px}")
-    H.append("h1{color:#7dd3fc;border-bottom:2px solid #1e3a5f;padding-bottom:8px}")
-    H.append("h2{color:#bae6fd;margin-top:24px}")
-    H.append("h3{color:#7dd3fc;font-size:14px;margin-top:18px}")
-    H.append("table{border-collapse:collapse;width:100%;background:#111827;border-radius:6px;overflow:hidden;margin:8px 0}")
-    H.append("th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #1e293b;font-size:13px}")
-    H.append("th{background:#1e293b;color:#93c5fd}")
-    H.append(".win{color:#86efac}.lose{color:#fca5a5}.warn{color:#fcd34d}.muted{color:#64748b}")
-    H.append(".banner-suspended{background:rgba(248,113,113,0.15);border-left:4px solid #f87171;padding:10px 14px;margin:8px 0;border-radius:4px}")
-    H.append(".banner-ok{background:rgba(74,222,128,0.1);border-left:4px solid #4ade80;padding:10px 14px;margin:8px 0;border-radius:4px}")
-    H.append("code{background:#1e293b;padding:1px 5px;border-radius:3px;font-size:12px}")
+    # Light theme for max email-client compatibility (Gmail/Outlook/mobile, light+dark mode)
+    H.append("body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background:#ffffff;color:#1f2937;padding:20px;max-width:1100px;margin:auto;font-size:14px;line-height:1.5}")
+    H.append("h1{color:#0369a1;border-bottom:2px solid #bae6fd;padding-bottom:8px;margin-bottom:16px}")
+    H.append("h2{color:#0c4a6e;margin-top:28px;border-bottom:1px solid #e5e7eb;padding-bottom:6px}")
+    H.append("h3{color:#0369a1;font-size:14px;margin-top:18px}")
+    H.append("table{border-collapse:collapse;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;margin:8px 0}")
+    H.append("th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #e5e7eb;font-size:13px}")
+    H.append("th{background:#f3f4f6;color:#0369a1;font-weight:600}")
+    H.append("tr:last-child td{border-bottom:none}")
+    H.append("tr:hover{background:#f9fafb}")
+    # Status colors — strong contrast on white
+    H.append(".win{color:#15803d;font-weight:600}")
+    H.append(".lose{color:#b91c1c;font-weight:600}")
+    H.append(".warn{color:#a16207;font-weight:600}")
+    H.append(".muted{color:#6b7280}")
+    H.append(".banner-suspended{background:#fef2f2;border-left:4px solid #dc2626;padding:12px 16px;margin:12px 0;border-radius:4px;color:#991b1b}")
+    H.append(".banner-ok{background:#f0fdf4;border-left:4px solid #16a34a;padding:12px 16px;margin:12px 0;border-radius:4px;color:#166534}")
+    H.append("code{background:#f3f4f6;color:#1f2937;padding:1px 5px;border-radius:3px;font-size:12px;font-family:Menlo,Monaco,monospace}")
     H.append(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:8px 0}")
-    H.append(".card{background:#111827;border:1px solid #1e293b;border-radius:6px;padding:10px}")
-    H.append(".card .label{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px}")
-    H.append(".card .value{font-size:18px;font-weight:bold;margin-top:2px}")
+    H.append(".card{background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px}")
+    H.append(".card .label{font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;font-weight:600}")
+    H.append(".card .value{font-size:18px;font-weight:bold;margin-top:2px;color:#1f2937}")
     H.append("</style></head><body>")
 
     H.append(f"<h1>📊 V11 System Digest — {now.strftime('%Y-%m-%d %H:%M UTC')}</h1>")
@@ -209,6 +395,9 @@ def build_html(data: dict) -> str:
         H.append("<div class='banner-ok'><b>✅ Tous les 5 variants opérationnels</b> — aucun killswitch déclenché</div>")
 
     H.append(f"<p>🪙 BTC 24h: <b>{btc_str}</b> | Dominance: <b>{data['btc_dominance']:.1f}%</b></p>")
+
+    # === V11B FOCUS — variant principal (avant la vue d'ensemble) ===
+    H.extend(_v11b_focus_html(data))
 
     # === Section 1: Per-variant summary ===
     H.append("<h2>1. Vue d'ensemble — état des 5 variants</h2>")
@@ -382,7 +571,7 @@ def build_html(data: dict) -> str:
             H.append("Pour reprendre : bouton dans le dashboard /portfolio (V11x → bandeau rouge → ▶️ Reprendre)")
             H.append("</div>")
 
-    H.append("<hr style='border-color:#1e293b;margin-top:30px'>")
+    H.append("<hr style='border:none;border-top:1px solid #e5e7eb;margin-top:30px'>")
     H.append(f"<p class='muted' style='font-size:11px'>Digest généré par <code>scripts/digest_report.py</code> "
              f"• Window {window_h:.0f}h • {now.strftime('%Y-%m-%d %H:%M:%S UTC')}</p>")
     H.append("</body></html>")
