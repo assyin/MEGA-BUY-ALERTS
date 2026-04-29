@@ -120,7 +120,7 @@ def build_markdown(data: dict) -> str:
     L.append(f"<i>Window: dernières {window_h:.0f}h</i>")
     btc = data.get("btc_24h")
     btc_str = f"{btc:+.2f}%" if btc is not None else "n/a"
-    L.append(f"🪙 BTC 24h: <b>{_h(btc_str)}</b> | Dominance: {data['btc_dominance']:.1f}%")
+    L.append(f"🪙 BTC 24h: <b>{_h(btc_str)}</b> | Dominance: {(f'{d:.1f}%' if (d := data.get('btc_dominance')) is not None else 'n/a')}")
     L.append("")
 
     # ━━━━━━━━━━ V11B FOCUS — variant principal ━━━━━━━━━━
@@ -394,7 +394,9 @@ def build_html(data: dict) -> str:
     else:
         H.append("<div class='banner-ok'><b>✅ Tous les 5 variants opérationnels</b> — aucun killswitch déclenché</div>")
 
-    H.append(f"<p>🪙 BTC 24h: <b>{btc_str}</b> | Dominance: <b>{data['btc_dominance']:.1f}%</b></p>")
+    dom_val = data.get('btc_dominance')
+    dom_str = f"{dom_val:.1f}%" if dom_val is not None else "n/a"
+    H.append(f"<p>🪙 BTC 24h: <b>{btc_str}</b> | Dominance: <b>{dom_str}</b></p>")
 
     # === V11B FOCUS — variant principal (avant la vue d'ensemble) ===
     H.extend(_v11b_focus_html(data))
