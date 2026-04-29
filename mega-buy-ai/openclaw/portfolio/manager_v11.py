@@ -406,13 +406,16 @@ class _PortfolioV11Base:
         tt = state.get("total_trades", 0) + 1
         w = state.get("wins", 0) + (1 if is_win else 0)
         l = state.get("losses", 0) + (0 if is_win else 1)
-        peak_pnl = max(state.get("peak_balance", 0), tp)
-        dd = (peak_pnl - tp) / self.INITIAL_CAPITAL * 100 if self.INITIAL_CAPITAL > 0 else 0
+        # Peak equity = INITIAL_CAPITAL + max running total_pnl. Compare equity-vs-equity
+        # (pas peak_balance vs total_pnl — bug fixé 2026-04-29 qui produisait DD=99% sur V11B).
+        equity = self.INITIAL_CAPITAL + tp
+        peak_equity = max(state.get("peak_balance", self.INITIAL_CAPITAL), equity)
+        dd = ((peak_equity - equity) / peak_equity * 100) if peak_equity > 0 else 0
         self._update_state({
             "balance": round(bal, 2),
             "total_pnl": round(tp, 2),
             "total_trades": tt, "wins": w, "losses": l,
-            "peak_balance": round(peak_pnl, 2),
+            "peak_balance": round(peak_equity, 2),
             "max_drawdown_pct": round(max(state.get("max_drawdown_pct", 0), dd), 2),
         })
         print(f"💼 {self.VARIANT.upper()} {'✅' if is_win else '❌'}: {pos['pair']} {pnl_pct:+.1f}% — {reason}")
