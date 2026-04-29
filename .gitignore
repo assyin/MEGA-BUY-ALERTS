@@ -88,3 +88,5 @@ mega-buy-ai/dashboard-vercel/
 
 # Allow the backup index even though backups/ is otherwise excluded
 !backups/BACKUP_REFERENCE.md
+
+V11_DIGEST_*.html

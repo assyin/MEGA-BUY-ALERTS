@@ -1,0 +1,424 @@
+#!/usr/bin/env python3
+"""V11 system digest — comprehensive report covering all 5 variants.
+
+Generates:
+- Markdown text (for Telegram, condensed)
+- HTML (for email, full detailed)
+
+Sections:
+1. Header: timestamp, BTC context, killswitch state summary
+2. Per-variant state (WR, paper coverage, suspended status, open positions)
+3. Closes in last 8h window (per-trade detail with PnL, reason, slippage if available)
+4. Open positions (sorted by age, current PnL, time-to-timeout)
+5. Paper P&L vs Backtest delta (when paper data available)
+6. Killswitch events / BTC dump events in window
+7. Risk metrics top-level summary
+
+Usage:
+    python3 scripts/digest_report.py [--window-hours N]
+    Output: prints HTML to stdout, writes Markdown to /tmp/digest_md.txt
+"""
+
+import argparse
+import sys
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
+
+from openclaw.config import get_settings
+from openclaw.portfolio.gates_v11 import get_btc_change_24h, get_btc_dominance
+from supabase import create_client
+from _risk_metrics import compute_risk_metrics
+
+
+VARIANTS = ("v11a", "v11b", "v11c", "v11d", "v11e")
+VARIANT_LABEL = {
+    "v11a": "Custom (continuation)",
+    "v11b": "Compression (R30m+R4h)",
+    "v11c": "Premium (R1h+BTC.D)",
+    "v11d": "Accum Breakout",
+    "v11e": "BB Squeeze 4H",
+}
+
+
+def fmt_age(hours: float) -> str:
+    if hours < 1: return f"{int(hours*60)}min"
+    if hours < 24: return f"{hours:.1f}h"
+    days = int(hours // 24); rem = int(hours % 24)
+    return f"{days}j{rem}h"
+
+
+def parse_iso(s: str):
+    if not s: return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def collect_data(sb, window_h: float):
+    """Collect everything needed for the digest in one pass."""
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=window_h)
+    out = {"now": now, "cutoff": cutoff, "window_h": window_h, "variants": {}}
+
+    for v in VARIANTS:
+        st_r = sb.table(f"openclaw_portfolio_state_{v}").select("*").eq("id", "main").single().execute()
+        state = st_r.data or {}
+
+        pos_r = sb.table(f"openclaw_positions_{v}").select(
+            "pair,entry_price,exit_price,size_usd,pnl_pct,pnl_usd,paper_entry_price,"
+            "paper_slippage_pct,paper_pnl_pct,paper_pnl_usd,status,close_reason,opened_at,"
+            "closed_at,partial1_done,partial2_done,trail_active,decision,confidence"
+        ).order("opened_at", desc=True).limit(2000).execute()
+        rows = pos_r.data or []
+
+        closes_window = [r for r in rows
+                         if r.get("status") == "CLOSED"
+                         and parse_iso(r.get("closed_at")) is not None
+                         and parse_iso(r.get("closed_at")) >= cutoff]
+        opens = [r for r in rows if r.get("status") == "OPEN"]
+        all_closed = [r for r in rows if r.get("status") == "CLOSED"]
+
+        # WR last 30 (killswitch criterion)
+        last30 = sorted(all_closed, key=lambda x: x.get("closed_at") or "", reverse=True)[:30]
+        wr_last30 = (sum(1 for r in last30 if (r.get("pnl_usd") or 0) > 0) / len(last30) * 100) if last30 else 0
+
+        # Paper data coverage
+        with_paper_pnl = [r for r in all_closed if r.get("paper_pnl_pct") is not None]
+
+        out["variants"][v] = {
+            "state": state, "rows_total": len(rows),
+            "closes_window": closes_window, "opens": opens,
+            "all_closed": all_closed,
+            "wr_last30": wr_last30, "n_last30": len(last30),
+            "with_paper_pnl": with_paper_pnl,
+        }
+
+    # BTC context
+    out["btc_24h"] = get_btc_change_24h()
+    out["btc_dominance"] = get_btc_dominance()
+
+    return out
+
+
+def _h(s) -> str:
+    """HTML-escape for Telegram parse_mode=HTML."""
+    if s is None: return ""
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def build_markdown(data: dict) -> str:
+    """Condensed HTML for Telegram (4096 char limit). parse_mode=HTML is more
+    forgiving than Markdown — only &<> need escaping.
+    Function name kept for API compat (used to be Markdown)."""
+    now = data["now"]; window_h = data["window_h"]
+    L = []
+    L.append(f"📊 <b>V11 Digest — {_h(now.strftime('%Y-%m-%d %H:%M UTC'))}</b>")
+    L.append(f"<i>Window: dernières {window_h:.0f}h</i>")
+    btc = data.get("btc_24h")
+    btc_str = f"{btc:+.2f}%" if btc is not None else "n/a"
+    L.append(f"🪙 BTC 24h: <b>{_h(btc_str)}</b> | Dominance: {data['btc_dominance']:.1f}%")
+    L.append("")
+
+    # Summary table
+    n_suspended = sum(1 for v in VARIANTS if data["variants"][v]["state"].get("is_suspended"))
+    total_closes_window = sum(len(data["variants"][v]["closes_window"]) for v in VARIANTS)
+    total_opens = sum(len(data["variants"][v]["opens"]) for v in VARIANTS)
+    L.append(f"🛑 Suspended: <b>{n_suspended}/5</b> | "
+             f"📉 Closes ({window_h:.0f}h): <b>{total_closes_window}</b> | "
+             f"📂 Open: <b>{total_opens}</b>")
+    L.append("")
+
+    # Per-variant compact line
+    for v in VARIANTS:
+        d = data["variants"][v]
+        st = d["state"]
+        susp_emoji = "🛑" if st.get("is_suspended") else "✅"
+        wr_overall = (st.get("wins", 0) / max(st.get("total_trades", 0), 1)) * 100
+        n_w = len(d["closes_window"])
+        pnl_w = sum((r.get("pnl_usd") or 0) for r in d["closes_window"])
+        n_paper = len(d["with_paper_pnl"])
+        line = (f"{susp_emoji} <b>{v.upper()}</b> — WR all: <b>{wr_overall:.1f}%</b> "
+                f"({st.get('wins', 0)}/{st.get('total_trades', 0)}) | "
+                f"WR-30: <b>{d['wr_last30']:.1f}%</b> | "
+                f"Δ{window_h:.0f}h: {n_w} closes ${pnl_w:+.0f} | "
+                f"Open: {len(d['opens'])} | Paper: {n_paper}")
+        L.append(line)
+    L.append("")
+
+    # Closes detail (if any)
+    if total_closes_window:
+        L.append(f"━━━ Closes dans les {window_h:.0f}h ━━━")
+        for v in VARIANTS:
+            for r in data["variants"][v]["closes_window"][:5]:  # cap 5/variant
+                pnl = r.get("pnl_usd") or 0
+                emoji = "✅" if pnl > 0 else "❌"
+                reason = (r.get("close_reason") or "?").split(":", 1)[-1]
+                L.append(f"{emoji} {v.upper()} <code>{_h(r.get('pair'))}</code> {r.get('pnl_pct') or 0:+.1f}% "
+                         f"(${pnl:+.1f}) — {_h(reason)}")
+
+    # Killswitch alerts
+    suspended_now = [v for v in VARIANTS if data["variants"][v]["state"].get("is_suspended")]
+    if suspended_now:
+        L.append("")
+        L.append("━━━ ⚠️ Suspensions actives ━━━")
+        for v in suspended_now:
+            st = data["variants"][v]["state"]
+            L.append(f"🛑 <b>{v.upper()}</b>: {_h(st.get('suspended_reason', '?'))}")
+
+    return "\n".join(L)
+
+
+def build_html(data: dict) -> str:
+    """Full HTML for email — detailed, same depth as audit reports."""
+    now = data["now"]; window_h = data["window_h"]
+    H = []
+    H.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>")
+    H.append("<style>")
+    H.append("body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;padding:20px;max-width:1100px;margin:auto;font-size:14px}")
+    H.append("h1{color:#7dd3fc;border-bottom:2px solid #1e3a5f;padding-bottom:8px}")
+    H.append("h2{color:#bae6fd;margin-top:24px}")
+    H.append("h3{color:#7dd3fc;font-size:14px;margin-top:18px}")
+    H.append("table{border-collapse:collapse;width:100%;background:#111827;border-radius:6px;overflow:hidden;margin:8px 0}")
+    H.append("th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #1e293b;font-size:13px}")
+    H.append("th{background:#1e293b;color:#93c5fd}")
+    H.append(".win{color:#86efac}.lose{color:#fca5a5}.warn{color:#fcd34d}.muted{color:#64748b}")
+    H.append(".banner-suspended{background:rgba(248,113,113,0.15);border-left:4px solid #f87171;padding:10px 14px;margin:8px 0;border-radius:4px}")
+    H.append(".banner-ok{background:rgba(74,222,128,0.1);border-left:4px solid #4ade80;padding:10px 14px;margin:8px 0;border-radius:4px}")
+    H.append("code{background:#1e293b;padding:1px 5px;border-radius:3px;font-size:12px}")
+    H.append(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:8px 0}")
+    H.append(".card{background:#111827;border:1px solid #1e293b;border-radius:6px;padding:10px}")
+    H.append(".card .label{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px}")
+    H.append(".card .value{font-size:18px;font-weight:bold;margin-top:2px}")
+    H.append("</style></head><body>")
+
+    H.append(f"<h1>📊 V11 System Digest — {now.strftime('%Y-%m-%d %H:%M UTC')}</h1>")
+    H.append(f"<p class='muted'>Fenêtre: dernières {window_h:.0f}h • Couvre les 5 variants V11</p>")
+
+    # Top banner — system health
+    n_suspended = sum(1 for v in VARIANTS if data["variants"][v]["state"].get("is_suspended"))
+    btc = data.get("btc_24h")
+    btc_str = f"{btc:+.2f}%" if btc is not None else "n/a"
+    if n_suspended > 0:
+        suspended_list = [v.upper() for v in VARIANTS if data["variants"][v]["state"].get("is_suspended")]
+        H.append(f"<div class='banner-suspended'><b>⚠️ {n_suspended}/5 variants suspendus :</b> {', '.join(suspended_list)}</div>")
+    else:
+        H.append("<div class='banner-ok'><b>✅ Tous les 5 variants opérationnels</b> — aucun killswitch déclenché</div>")
+
+    H.append(f"<p>🪙 BTC 24h: <b>{btc_str}</b> | Dominance: <b>{data['btc_dominance']:.1f}%</b></p>")
+
+    # === Section 1: Per-variant summary ===
+    H.append("<h2>1. Vue d'ensemble — état des 5 variants</h2>")
+    H.append("<table>")
+    H.append("<tr><th>Variant</th><th>Filtre</th><th>Total trades</th><th>WR all-time</th>"
+             "<th>WR last 30</th><th>Open</th><th>Closes (window)</th><th>PnL window</th>"
+             "<th>Paper pnl rows</th><th>Status</th></tr>")
+    for v in VARIANTS:
+        d = data["variants"][v]; st = d["state"]
+        total = st.get("total_trades", 0); w = st.get("wins", 0)
+        wr_overall = (w / max(total, 1)) * 100 if total else 0
+        wr_30 = d["wr_last30"]
+        susp = st.get("is_suspended")
+        n_w = len(d["closes_window"])
+        pnl_w = sum((r.get("pnl_usd") or 0) for r in d["closes_window"])
+        wr_color = "win" if wr_overall >= 75 else "warn" if wr_overall >= 60 else "lose"
+        wr30_color = "win" if wr_30 >= 75 else "warn" if wr_30 >= 70 else "lose"
+        status_html = "<span class='lose'>🛑 SUSPENDED</span>" if susp else "<span class='win'>✅ active</span>"
+        pnl_color = "win" if pnl_w >= 0 else "lose"
+        H.append(f"<tr><td><b>{v.upper()}</b></td><td>{VARIANT_LABEL[v]}</td>"
+                 f"<td>{total}</td>"
+                 f"<td class='{wr_color}'>{wr_overall:.1f}%</td>"
+                 f"<td class='{wr30_color}'>{wr_30:.1f}%</td>"
+                 f"<td>{len(d['opens'])}</td>"
+                 f"<td>{n_w}</td>"
+                 f"<td class='{pnl_color}'>${pnl_w:+,.2f}</td>"
+                 f"<td>{len(d['with_paper_pnl'])}</td>"
+                 f"<td>{status_html}</td></tr>")
+    H.append("</table>")
+
+    # === Section 2: Closes detailed in window ===
+    total_closes = sum(len(data["variants"][v]["closes_window"]) for v in VARIANTS)
+    H.append(f"<h2>2. Closes des {window_h:.0f}h dernières heures ({total_closes} trades)</h2>")
+    if total_closes == 0:
+        H.append("<p class='muted'><i>Aucune fermeture dans la fenêtre.</i></p>")
+    else:
+        H.append("<table>")
+        H.append("<tr><th>Variant</th><th>Pair</th><th>Decision</th><th>PnL %</th><th>PnL $</th>"
+                 "<th>Reason</th><th>Hold</th><th>Slippage</th><th>Paper PnL %</th><th>Closed at</th></tr>")
+        all_closes = []
+        for v in VARIANTS:
+            for r in data["variants"][v]["closes_window"]:
+                r["_variant"] = v
+                all_closes.append(r)
+        all_closes.sort(key=lambda r: r.get("closed_at") or "", reverse=True)
+        for r in all_closes:
+            pnl_pct = r.get("pnl_pct") or 0
+            pnl_usd = r.get("pnl_usd") or 0
+            cls = "win" if pnl_usd > 0 else "lose"
+            opened = parse_iso(r.get("opened_at"))
+            closed = parse_iso(r.get("closed_at"))
+            hold = fmt_age((closed - opened).total_seconds() / 3600) if opened and closed else "—"
+            reason = (r.get("close_reason") or "?").split(":", 1)[-1]
+            slip = r.get("paper_slippage_pct")
+            slip_str = f"{slip:+.3f}%" if slip is not None else "—"
+            ppnl = r.get("paper_pnl_pct")
+            ppnl_str = f"{ppnl:+.2f}%" if ppnl is not None else "<span class='muted'>—</span>"
+            cl_short = (r.get("closed_at") or "")[:16].replace("T", " ")
+            H.append(f"<tr><td><b>{r['_variant'].upper()}</b></td><td>{r.get('pair')}</td>"
+                     f"<td>{r.get('decision', '')}</td>"
+                     f"<td class='{cls}'>{pnl_pct:+.2f}%</td>"
+                     f"<td class='{cls}'>${pnl_usd:+,.2f}</td>"
+                     f"<td><code>{reason}</code></td>"
+                     f"<td>{hold}</td>"
+                     f"<td>{slip_str}</td>"
+                     f"<td>{ppnl_str}</td>"
+                     f"<td class='muted'>{cl_short}</td></tr>")
+        H.append("</table>")
+
+    # === Section 3: Open positions ===
+    total_open = sum(len(data["variants"][v]["opens"]) for v in VARIANTS)
+    H.append(f"<h2>3. Positions ouvertes ({total_open} actives)</h2>")
+    if total_open == 0:
+        H.append("<p class='muted'><i>Aucune position ouverte.</i></p>")
+    else:
+        H.append("<table>")
+        H.append("<tr><th>Variant</th><th>Pair</th><th>Entry</th><th>PnL %</th>"
+                 "<th>Hold</th><th>Time-to-timeout</th><th>TP1?</th><th>TP2?</th><th>Trail?</th></tr>")
+        all_opens = []
+        for v in VARIANTS:
+            for r in data["variants"][v]["opens"]:
+                r["_variant"] = v
+                all_opens.append(r)
+        # Sort by hold age desc (oldest first → most urgent for timeout)
+        now_dt = data["now"]
+        for r in all_opens:
+            o = parse_iso(r.get("opened_at"))
+            r["_age_h"] = (now_dt - o).total_seconds() / 3600 if o else 0
+        all_opens.sort(key=lambda r: -r["_age_h"])
+        for r in all_opens:
+            pnl_pct = r.get("pnl_pct") or 0
+            cls = "win" if pnl_pct > 0 else "lose"
+            age = fmt_age(r["_age_h"])
+            ttt = max(0, 72 - r["_age_h"])
+            ttt_str = fmt_age(ttt) if ttt > 0 else "TIMEOUT NOW"
+            ttt_color = "lose" if ttt < 12 else "warn" if ttt < 24 else "muted"
+            H.append(f"<tr><td><b>{r['_variant'].upper()}</b></td><td>{r.get('pair')}</td>"
+                     f"<td>${r.get('entry_price', 0):.6f}</td>"
+                     f"<td class='{cls}'>{pnl_pct:+.2f}%</td>"
+                     f"<td>{age}</td>"
+                     f"<td class='{ttt_color}'>{ttt_str}</td>"
+                     f"<td>{'✅' if r.get('partial1_done') else '—'}</td>"
+                     f"<td>{'✅' if r.get('partial2_done') else '—'}</td>"
+                     f"<td>{'✅' if r.get('trail_active') else '—'}</td></tr>")
+        H.append("</table>")
+
+    # === Section 4: Paper data status (per variant) ===
+    H.append("<h2>4. Phase 1 — Paper trading instrumentation</h2>")
+    has_any_paper = any(len(data["variants"][v]["with_paper_pnl"]) > 0 for v in VARIANTS)
+    if not has_any_paper:
+        H.append("<p class='muted'><i>Aucune paper data accumulée encore. Les positions doivent se fermer "
+                 "puis de nouveaux opens doivent se produire pour générer la première mesure.</i></p>")
+    else:
+        H.append("<table>")
+        H.append("<tr><th>Variant</th><th>Paper rows</th><th>Avg slippage</th><th>WR backtest</th>"
+                 "<th>WR paper</th><th>Δ WR</th><th>Verdict</th></tr>")
+        for v in VARIANTS:
+            d = data["variants"][v]
+            paper = d["with_paper_pnl"]
+            if not paper:
+                H.append(f"<tr><td><b>{v.upper()}</b></td><td>0</td><td colspan='5' class='muted'>Pas de data</td></tr>")
+                continue
+            slips = [r.get("paper_slippage_pct") for r in paper if r.get("paper_slippage_pct") is not None]
+            avg_slip = sum(slips)/len(slips) if slips else 0
+            bt_wins = sum(1 for r in paper if (r.get("pnl_usd") or 0) > 0)
+            pp_wins = sum(1 for r in paper if (r.get("paper_pnl_usd") or 0) > 0)
+            bt_wr = bt_wins/len(paper)*100
+            pp_wr = pp_wins/len(paper)*100
+            delta = pp_wr - bt_wr
+            abs_delta = abs(delta)
+            if abs_delta <= 8: verdict = "<span class='win'>✅ PASS</span>"
+            elif abs_delta <= 10: verdict = "<span class='warn'>⚠️ WATCH</span>"
+            else: verdict = "<span class='lose'>🛑 FAIL</span>"
+            H.append(f"<tr><td><b>{v.upper()}</b></td><td>{len(paper)}</td>"
+                     f"<td>{avg_slip:+.3f}%</td>"
+                     f"<td>{bt_wr:.1f}%</td><td>{pp_wr:.1f}%</td>"
+                     f"<td>{delta:+.1f}pts</td><td>{verdict}</td></tr>")
+        H.append("</table>")
+
+    # === Section 5: Risk metrics (V11B detail since it's the lead variant) ===
+    v11b = data["variants"]["v11b"]
+    if v11b["all_closed"]:
+        rm = compute_risk_metrics(v11b["all_closed"], initial_capital=5000.0)
+        H.append("<h2>5. Risk metrics — V11B (variant principal)</h2>")
+        H.append("<div class='grid'>")
+        for label, value, color in [
+            ("Sharpe annualisé", f"{rm['sharpe_annualized']:.2f}", "win"),
+            ("Profit Factor", f"{rm['profit_factor']:.2f}" if rm['profit_factor'] != float('inf') else "∞", "win"),
+            ("Max DD", f"{rm['max_drawdown_pct']:.2f}%", "win" if rm['max_drawdown_pct'] < 5 else "warn"),
+            ("Calmar", f"{rm['calmar_ratio']:.1f}" if rm['calmar_ratio'] != float('inf') else "∞", "win"),
+            ("Max losing streak", f"{rm['max_consecutive_losses']}", "muted"),
+            ("Max winning streak", f"{rm['max_consecutive_wins']}", "win"),
+        ]:
+            H.append(f"<div class='card'><div class='label'>{label}</div>"
+                     f"<div class='value {color}'>{value}</div></div>")
+        H.append("</div>")
+        H.append("<p class='muted' style='font-size:11px;font-style:italic'>"
+                 "⚠️ Sharpe annualisé théorique. En live un Sharpe 2-4 serait excellent. "
+                 "Voir Profit Factor et Calmar pour des métriques plus interprétables.</p>")
+
+    # === Section 6: Suspensions actives détail ===
+    suspended_now = [v for v in VARIANTS if data["variants"][v]["state"].get("is_suspended")]
+    if suspended_now:
+        H.append("<h2>6. Suspensions actives — action requise</h2>")
+        for v in suspended_now:
+            st = data["variants"][v]["state"]
+            H.append(f"<div class='banner-suspended'>")
+            H.append(f"<b>🛑 {v.upper()} SUSPENDED</b><br>")
+            H.append(f"Raison : <code>{st.get('suspended_reason', '?')}</code><br>")
+            H.append(f"Depuis : <code>{st.get('suspended_at', '?')}</code><br>")
+            H.append("Pour reprendre : bouton dans le dashboard /portfolio (V11x → bandeau rouge → ▶️ Reprendre)")
+            H.append("</div>")
+
+    H.append("<hr style='border-color:#1e293b;margin-top:30px'>")
+    H.append(f"<p class='muted' style='font-size:11px'>Digest généré par <code>scripts/digest_report.py</code> "
+             f"• Window {window_h:.0f}h • {now.strftime('%Y-%m-%d %H:%M:%S UTC')}</p>")
+    H.append("</body></html>")
+    return "\n".join(H)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--window-hours", type=float, default=8.0,
+                        help="Hours of activity to cover (default 8h, matches 3x/day cadence)")
+    parser.add_argument("--out-md", default="/tmp/digest.md")
+    parser.add_argument("--out-html", default="/tmp/digest.html")
+    args = parser.parse_args()
+
+    s = get_settings()
+    sb = create_client(s.supabase_url, s.supabase_service_key)
+
+    print(f"📥 Collecting V11 data (window={args.window_hours}h)...", file=sys.stderr)
+    data = collect_data(sb, args.window_hours)
+
+    md = build_markdown(data)
+    html = build_html(data)
+
+    Path(args.out_md).write_text(md, encoding="utf-8")
+    Path(args.out_html).write_text(html, encoding="utf-8")
+
+    print(f"✅ Markdown: {args.out_md} ({len(md)} chars)", file=sys.stderr)
+    print(f"✅ HTML: {args.out_html} ({len(html)} chars)", file=sys.stderr)
+
+    # Stats summary
+    n_closes = sum(len(data["variants"][v]["closes_window"]) for v in VARIANTS)
+    n_open = sum(len(data["variants"][v]["opens"]) for v in VARIANTS)
+    n_susp = sum(1 for v in VARIANTS if data["variants"][v]["state"].get("is_suspended"))
+    print(f"📊 Closes ({args.window_hours}h): {n_closes} | Open: {n_open} | Suspended: {n_susp}/5",
+          file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
