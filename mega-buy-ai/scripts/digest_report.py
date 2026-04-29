@@ -71,7 +71,8 @@ def collect_data(sb, window_h: float):
         pos_r = sb.table(f"openclaw_positions_{v}").select(
             "pair,entry_price,exit_price,size_usd,pnl_pct,pnl_usd,paper_entry_price,"
             "paper_slippage_pct,paper_pnl_pct,paper_pnl_usd,status,close_reason,opened_at,"
-            "closed_at,partial1_done,partial2_done,trail_active,decision,confidence"
+            "closed_at,partial1_done,partial2_done,trail_active,decision,confidence,"
+            "remaining_size_pct,realized_pnl_usd"
         ).order("opened_at", desc=True).limit(2000).execute()
         rows = pos_r.data or []
 
